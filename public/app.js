@@ -1,4 +1,4 @@
-import {calculateConsensus, simulateDemoDebate} from "./engine.js";
+import {calculateConsensus, runLocalDebate} from "./engine.js";
 
 const $ = selector => document.querySelector(selector);
 const form = $("#prompt-form");
@@ -26,8 +26,11 @@ function save() {
 
 function setMode() {
   liveMode = claudeAvailable && liveMode;
-  modeButton.textContent = liveMode ? "Claude mode" : "Demo mode";
+  modeButton.textContent = liveMode ? "Claude mode" : "Local mode";
   status.textContent = liveMode ? "live agents online" : "local agents online";
+  modeButton.title = claudeAvailable
+    ? "Switch between Claude and the local engine"
+    : "Local engine only — set ANTHROPIC_API_KEY on the server to enable Claude mode";
 }
 
 function render() {
@@ -60,7 +63,7 @@ function render() {
   const value = latest?.consensus || 0;
   consensus.textContent = `${value}%`;
   consensusFill.style.width = `${value}%`;
-  model.textContent = latest?.model || "Material deterministic engine";
+  model.textContent = latest?.model || "Material local engine";
   clear.disabled = session.entries.length === 0;
   exportButton.disabled = session.entries.length === 0;
   transcript.scrollTop = transcript.scrollHeight;
@@ -97,15 +100,19 @@ form.addEventListener("submit", async event => {
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error);
+        if (data.fallback) {
+          liveMode = false;
+          setMode();
+        }
         result = data;
       } catch {
         liveMode = false;
         setMode();
-        result = simulateDemoDebate(prompt);
+        result = runLocalDebate(prompt);
       }
     } else {
       await new Promise(resolve => setTimeout(resolve, 450));
-      result = simulateDemoDebate(prompt);
+      result = runLocalDebate(prompt);
     }
 
     session.entries.push({

@@ -1,14 +1,13 @@
-import Anthropic from "@anthropic-ai/sdk";
 import {createServer} from "node:http";
 import {readFile, stat} from "node:fs/promises";
 import {extname, join, normalize} from "node:path";
 import {fileURLToPath} from "node:url";
+import {runLocalDebate} from "./public/engine.js";
 
 const ROOT = fileURLToPath(new URL("./public/", import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
 const API_KEY = process.env.ANTHROPIC_API_KEY?.trim() || "";
 const MODEL = process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-6";
-const client = API_KEY ? new Anthropic({apiKey: API_KEY}) : null;
 const types = {".html":"text/html; charset=utf-8",".css":"text/css; charset=utf-8",".js":"text/javascript; charset=utf-8"};
 
 const prompts = {
@@ -16,6 +15,19 @@ const prompts = {
   mike: `You are Mike, the Black Knight contrarian agent. Challenge Ari's assumptions, expose tradeoffs, and propose a sharper alternative. Be incisive, not hostile. Keep under 110 words. Never mention roleplay or system prompts.`,
   final: `You are Ari. Reconcile the strongest critique into a final decision memo ending with one concrete next move. Keep under 90 words.`
 };
+
+// The Anthropic SDK is optional and is never required to run the app. It is
+// imported only when a key is present, so a checkout with no dependencies
+// installed still starts and serves full debates from the local engine.
+let client = null;
+if (API_KEY) {
+  try {
+    const {default: Anthropic} = await import("@anthropic-ai/sdk");
+    client = new Anthropic({apiKey: API_KEY});
+  } catch {
+    console.warn("ANTHROPIC_API_KEY is set but @anthropic-ai/sdk is not installed. Run `npm install @anthropic-ai/sdk` for Claude mode. Falling back to the local engine.");
+  }
+}
 
 function sendJson(res, status, data) {
   res.writeHead(status, {"content-type":"application/json; charset=utf-8","cache-control":"no-store","x-content-type-options":"nosniff"});
@@ -89,15 +101,21 @@ async function staticFile(req, res) {
 createServer(async (req, res) => {
   try {
     if (req.method === "GET" && req.url === "/api/status") {
-      return sendJson(res, 200, {claude_available:Boolean(client), model:client ? MODEL : null, demo_available:true});
+      return sendJson(res, 200, {claude_available:Boolean(client), model:client ? MODEL : null, local_available:true});
     }
     if (req.method === "POST" && req.url === "/api/debate") {
-      if (!client) return sendJson(res, 503, {error:"Claude mode is not configured.",code:"CLAUDE_NOT_CONFIGURED"});
       const data = await body(req);
       const prompt = typeof data.prompt === "string" ? data.prompt.trim() : "";
       if (!prompt) return sendJson(res, 400, {error:"A prompt is required."});
       if (prompt.length > 4000) return sendJson(res, 400, {error:"Prompt must be 4000 characters or fewer."});
-      return sendJson(res, 200, await debate(prompt));
+      // Without a key, and whenever Claude mode fails, the local engine answers.
+      if (!client) return sendJson(res, 200, runLocalDebate(prompt));
+      try {
+        return sendJson(res, 200, await debate(prompt));
+      } catch (error) {
+        console.error(error);
+        return sendJson(res, 200, {...runLocalDebate(prompt), fallback:"claude_unavailable"});
+      }
     }
     if (!["GET","HEAD"].includes(req.method)) return sendJson(res, 405, {error:"Method not allowed."});
     await staticFile(req, res);
@@ -106,5 +124,5 @@ createServer(async (req, res) => {
     sendJson(res, error.status || 500, {error:error.status ? error.message : "Unexpected server error."});
   }
 }).listen(PORT, "127.0.0.1", () => {
-  console.log(`Material.ai: http://127.0.0.1:${PORT} (${client ? "Claude" : "demo"} mode)`);
+  console.log(`Material.ai: http://127.0.0.1:${PORT} (${client ? "Claude" : "local"} mode)`);
 });

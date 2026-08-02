@@ -17,8 +17,12 @@ Producer, Creative Director, Designer, HTML Specialist, JavaScript Specialist, A
 ## Acceptance criteria
 
 1. A prompt produces an Ari → Mike → Ari debate.
-2. Demo results are deterministic for the same input.
-3. Claude mode activates only when the server has an API key.
-4. Static deployment works from `public/`.
-5. No secret appears in client code, local storage, or exported transcripts.
-6. Automated tests validate routing, deterministic output, and turn order.
+2. The app is fully usable with no API key, no network, and no dependencies.
+3. Local results are derived from the prompt's own structure — question kind,
+   named options, and constraint signals — not from a fixed response list.
+4. Local results are deterministic for the same input.
+5. Claude mode is opt-in, activates only when the server has an API key and the
+   optional SDK installed, and degrades to the local engine rather than failing.
+6. Static deployment works from `public/` with no backend.
+7. No secret appears in client code, local storage, or exported transcripts.
+8. Automated tests validate prompt analysis, deterministic output, and turn order.

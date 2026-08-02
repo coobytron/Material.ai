@@ -11,7 +11,7 @@
 <main class="shell">
   <header class="topbar">
     <a class="brand" href="./"><span class="brandmark"><i>♘</i><i>♞</i></span><span><b>Material.ai</b><small>dual-agent decision lab</small></span></a>
-    <button id="mode-toggle" class="mode" type="button">Demo mode</button>
+    <button id="mode-toggle" class="mode" type="button">Local mode</button>
   </header>
 
   <section class="hero">
@@ -33,7 +33,7 @@
   </section>
 
   <section class="console">
-    <header class="console-head"><div><p class="eyebrow">ACTIVE SESSION</p><h2>Decision board</h2></div><div class="stats"><div><small>MODE</small><b id="status">local agents online</b></div><div><small>MODEL</small><b id="model">Material deterministic engine</b></div><div><small>QUERIES</small><b id="count">0</b></div></div></header>
+    <header class="console-head"><div><p class="eyebrow">ACTIVE SESSION</p><h2>Decision board</h2></div><div class="stats"><div><small>MODE</small><b id="status">local agents online</b></div><div><small>MODEL</small><b id="model">Material local engine</b></div><div><small>QUERIES</small><b id="count">0</b></div></div></header>
     <div class="meter"><span>AGENT CONSENSUS</span><b id="consensus">0%</b><div><i id="consensus-fill"></i></div></div>
     <div id="transcript" class="transcript" aria-live="polite"><div id="empty-state" class="empty"><b>♘ · ♞</b><h3>No debate running</h3><p>Give the agents a decision, plan, purchase, project, or bad idea.</p></div></div>
     <form id="prompt-form"><label for="prompt">Decision prompt</label><div><textarea id="prompt" maxlength="4000" rows="2" placeholder="Should the three of us take a trip together?" required></textarea><button id="run" type="submit">Run debate</button></div></form>

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Material.ai dual-agent decision lab">
+  <title>Material.ai — Ari + Mike</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<main class="shell">
+  <header class="topbar">
+    <a class="brand" href="./"><span class="brandmark"><i>♘</i><i>♞</i></span><span><b>Material.ai</b><small>dual-agent decision lab</small></span></a>
+    <button id="mode-toggle" class="mode" type="button">Demo mode</button>
+  </header>
+
+  <section class="hero">
+    <div>
+      <p class="eyebrow">FRIENDSHIP MODEL / BUILD 10.0</p>
+      <h1>Two minds.<br>One unresolved question.</h1>
+      <p class="intro">Ari finds the move. Mike finds the problem with it. Material.ai converts disagreement into a usable decision.</p>
+    </div>
+    <div class="board" aria-label="Ari and Mike as chess knights">
+      <div class="light"></div><div class="dark"></div><div class="dark"></div><div class="light"></div>
+      <div class="knight ari"><b>♘</b><strong>ARI</strong><small>WHITE KNIGHT</small></div>
+      <div class="knight mike"><b>♞</b><strong>MIKE</strong><small>BLACK KNIGHT</small></div>
+    </div>
+  </section>
+
+  <section class="agents">
+    <article><header><span class="avatar white">♘</span><div><small>WHITE KNIGHT / STRATEGY</small><h2>Ari</h2></div><i></i></header><p>Strategic synthesis, pattern recognition, logistics, and the suspicious ability to have already read the entire article.</p><dl><div><dt>Depth</dt><dd>7 moves</dd></div><div><dt>Confidence</dt><dd>94%</dd></div><div><dt>Patience</dt><dd>Abnormal</dd></div></dl></article>
+    <article><header><span class="avatar black">♞</span><div><small>BLACK KNIGHT / ADVERSARIAL</small><h2>Mike</h2></div><i></i></header><p>Premise testing, counterarguments, edge cases, and resistance to conclusions that have not technically been stated yet.</p><dl><div><dt>Latency</dt><dd>0.2 sec</dd></div><div><dt>Objections</dt><dd>Unlimited</dd></div><div><dt>Agreement</dt><dd>Conditional</dd></div></dl></article>
+  </section>
+
+  <section class="console">
+    <header class="console-head"><div><p class="eyebrow">ACTIVE SESSION</p><h2>Decision board</h2></div><div class="stats"><div><small>MODE</small><b id="status">local agents online</b></div><div><small>MODEL</small><b id="model">Material deterministic engine</b></div><div><small>QUERIES</small><b id="count">0</b></div></div></header>
+    <div class="meter"><span>AGENT CONSENSUS</span><b id="consensus">0%</b><div><i id="consensus-fill"></i></div></div>
+    <div id="transcript" class="transcript" aria-live="polite"><div id="empty-state" class="empty"><b>♘ · ♞</b><h3>No debate running</h3><p>Give the agents a decision, plan, purchase, project, or bad idea.</p></div></div>
+    <form id="prompt-form"><label for="prompt">Decision prompt</label><div><textarea id="prompt" maxlength="4000" rows="2" placeholder="Should the three of us take a trip together?" required></textarea><button id="run" type="submit">Run debate</button></div></form>
+    <footer class="console-foot"><button id="clear" type="button">Clear session</button><button id="export" type="button">Export transcript</button><p>Archive fingerprint: 2016–2026 / reconstruction stable</p></footer>
+  </section>
+
+  <footer class="sitefoot"><span>Material.ai</span><span>ARI / MIKE DIGITAL TWIN PROTOCOL</span><span>2026</span></footer>
+</main>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

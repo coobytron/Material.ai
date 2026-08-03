@@ -41,6 +41,13 @@ test("signals come from the prompt", () => {
   assert.equal(signals.irreversible, false);
 });
 
+test("signal tokens do not match unintended substrings", () => {
+  assert.equal(analyze("Should I hire a contractor?").signals.irreversible, false);
+  assert.equal(analyze("Keep the discussion friendly.").signals.people, false);
+  assert.equal(analyze("Invite the cofounders tomorrow.").signals.shared, false);
+  assert.equal(analyze("Invite the cofounders tomorrow.").signals.people, false);
+});
+
 test("consensus is bounded and prompt-dependent", () => {
   for (const prompt of ["question", "Should we sell the company?", "Spend $500 by Friday or wait?"]) {
     const value = calculateConsensus(prompt);

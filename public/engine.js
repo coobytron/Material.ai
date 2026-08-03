@@ -15,11 +15,11 @@ const SPLIT = /\s+(?:or|vs\.?|versus)\s+/i;
 const SIGNALS = {
   money: /\$\s?[\d,]+|\b\d+\s?k\b|\bbudget|\bcost|\bprice|\bexpensive|\bafford|\bcheap|\bsalary|\bspend|\bpay\b|\bmoney\b|\bfunding\b/i,
   deadline: /\bdeadline|\bdue\b|\basap\b|\burgent|\b(?:mon|tues|wednes|thurs|fri|satur|sun)day\b|\bby\s+(?:next|the\s+end|then)|\bthis\s+(?:week|month|quarter|year)|\bnext\s+(?:week|month|quarter|year)|\btomorrow\b|\bq[1-4]\b/i,
-  shared: /\bwe\b|\bus\b|\bour\b|\bteam\b|\beveryone\b|\bpartner\b|\bfriends?\b|\bfamily\b|\bcofounder|\bboth\s+of\b|\bthe\s+(?:two|three|four)\s+of\b/i,
+  shared: /\bwe\b|\bus\b|\bour\b|\bteam\b|\beveryone\b|\bpartner\b|\bfriends?\b|\bfamily\b|\bcofounder\b|\bboth\s+of\b|\bthe\s+(?:two|three|four)\s+of\b/i,
   reversible: /\btry\b|\btest\b|\bpilot\b|\btrial\b|\bexperiment|\bprototype|\brent\b|\bborrow|\bbeta\b|\bdraft\b|\bfor\s+now\b/i,
-  irreversible: /\bquit\b|\bsell\b|\bmove\s+(?:to|out|away)|\bmarry|\bfire\b|\bdelete|\bshut\s+down|\bsign\b|\bcontract|\bpermanent|\blay\s+off|\bpublish|\bannounce|\bmigrate/i,
+  irreversible: /\bquit\b|\bsell\b|\bmove\s+(?:to|out|away)|\bmarry|\bfire\b|\bdelete|\bshut\s+down|\bsign\b|\bcontract\b|\bpermanent|\blay\s+off|\bpublish|\bannounce|\bmigrate/i,
   risk: /\brisk|\bsafe\b|\bdanger|\bfail|\blose\b|\blosing\b|\bdownside|\bworst\s+case|\bregret/i,
-  people: /\bhire\b|\bfire\b|\bteam\b|\bmanager|\breport|\bcofounder|\bfriend|\brelationship|\bpartner/i
+  people: /\bhire\b|\bfire\b|\bteam\b|\bmanager|\breport|\bcofounder\b|\bfriend\b|\brelationship|\bpartner/i
 };
 
 const banks = {
@@ -148,12 +148,8 @@ function shorten(value, words = 12) {
   return parts.length <= words ? value : `${parts.slice(0, words).join(" ")}…`;
 }
 
-// Strips the interrogative wrapper so the remainder reads as an action phrase:
-// "Should we ship Friday or wait?" -> "ship Friday or wait".
 function extractSubject(text) {
   let subject = tidy(text);
-  // Wrappers stack ("Is it worth buying…" is a lead plus a worth), so peel in
-  // passes and stop as soon as a pass changes nothing.
   for (let pass = 0; pass < 3; pass += 1) {
     const before = subject;
     for (const pattern of [HOWTO, TIMING, LEAD, WORTH]) {
@@ -172,7 +168,6 @@ function extractOptions(subject) {
   if (!SPLIT.test(subject)) return [];
   const parts = subject.split(SPLIT).map(tidy).filter(Boolean);
   if (parts.length < 2) return [];
-  // "coffee or tea" is a choice; "should we or should we not" is not worth splitting.
   const usable = parts.filter(part => part.length > 2 && part.split(" ").length <= 12);
   return usable.length >= 2 ? usable.slice(0, 2).map(part => shorten(part, 8)) : [];
 }
@@ -203,9 +198,6 @@ export function analyze(prompt) {
   };
 }
 
-// Consensus is a read on how far apart the two agents actually land: concrete
-// constraints and reversible stakes pull them together, open-ended or
-// irreversible questions push them apart.
 export function calculateConsensus(prompt) {
   const {signals, kind, options, seed} = analyze(prompt);
   let score = 50;
@@ -233,66 +225,43 @@ function constraintKey(signals) {
   return "none";
 }
 
-function jabKey(signals) {
-  if (signals.irreversible) return "irreversible";
-  if (signals.people) return "people";
-  if (signals.reversible) return "reversible";
-  if (signals.risk) return "risk";
-  if (signals.money) return "money";
-  if (signals.deadline) return "deadline";
-  if (signals.shared) return "shared";
+function pickJab(signals) {
+  for (const name of ["reversible", "irreversible", "people", "risk", "money", "deadline", "shared"]) {
+    if (signals[name]) return name;
+  }
   return "none";
 }
 
-function closeKey(signals) {
-  if (signals.deadline) return "deadline";
-  if (signals.shared) return "shared";
-  if (signals.money) return "money";
-  return "default";
-}
-
 export function runLocalDebate(prompt) {
-  const cleaned = typeof prompt === "string" ? prompt.trim() : "";
-  if (!cleaned) throw new Error("A prompt is required.");
-
-  const state = analyze(cleaned);
-  const {kind, options, seed, signals} = state;
-  const angles = ["structure", "cost", "evidence"];
-  const angle = angles[seed % angles.length];
-  const view = {
-    subject: state.subject,
-    a: options[0] || state.subject,
-    b: options[1] || state.subject
-  };
-
-  const moves = banks.move[angle];
-  const ari = [
+  if (!prompt?.trim()) throw new Error("A prompt is required.");
+  const analysis = analyze(prompt);
+  const {kind, options, signals, seed, subject} = analysis;
+  const angle = ["structure", "cost", "evidence"][seed % 3];
+  const view = {subject, a: options[0] || subject, b: options[1] || "the alternative"};
+  const opening = [
     fill(banks.frame[angle][kind], view),
-    banks.constraint[constraintKey(signals)],
-    fill(kind === "choice" ? moves.choice : moves.default, view)
+    fill(banks.constraint[constraintKey(signals)], view),
+    fill(banks.move[angle][kind === "choice" ? "choice" : "default"], view)
   ].join(" ");
-
-  const rebuttals = banks.rebut[angle];
-  const mike = [
-    rebuttals[(seed >>> 3) % rebuttals.length],
-    banks.jab[jabKey(signals)]
+  const rebut = [
+    banks.rebut[angle][(seed >>> 3) % banks.rebut[angle].length],
+    banks.jab[pickJab(signals)]
   ].join(" ");
-
   const final = [
     banks.concede[angle],
     fill(banks.rule[kind], view),
-    fill(banks.close[closeKey(signals)], view)
+    fill(banks.close[constraintKey(signals)] || banks.close.default, view)
   ].join(" ");
 
   return {
     mode: "local",
-    model: "Material local engine",
-    consensus: calculateConsensus(cleaned),
-    analysis: {kind, angle, options, topic: state.topic, signals},
+    model: "material-local-v2",
+    consensus: calculateConsensus(prompt),
+    analysis,
     turns: [
-      {agent: "ari", label: "ARI / OPENING", text: ari},
-      {agent: "mike", label: "MIKE / COUNTERPOINT", text: mike},
-      {agent: "ari", label: "ARI / FINAL MOVE", text: final}
+      {agent:"ari",label:"ARI / OPENING",text:opening},
+      {agent:"mike",label:"MIKE / COUNTERPOINT",text:rebut},
+      {agent:"ari",label:"ARI / FINAL MOVE",text:final}
     ]
   };
 }

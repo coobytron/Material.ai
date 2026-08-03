@@ -24,8 +24,9 @@ if (API_KEY) {
   try {
     const {default: Anthropic} = await import("@anthropic-ai/sdk");
     client = new Anthropic({apiKey: API_KEY});
-  } catch {
-    console.warn("ANTHROPIC_API_KEY is set but @anthropic-ai/sdk is not installed. Run `npm install @anthropic-ai/sdk` for Claude mode. Falling back to the local engine.");
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.warn(`ANTHROPIC_API_KEY is set but @anthropic-ai/sdk could not be loaded (${reason}). Run \`npm install @anthropic-ai/sdk\` for Claude mode. Falling back to the local engine.`);
   }
 }
 

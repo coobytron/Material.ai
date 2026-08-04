@@ -8,6 +8,6 @@
     "dev": "node --watch server.js",
     "test": "node --test"
   },
-  "//": "No runtime dependencies. The app runs fully offline. Claude mode is opt-in: npm install @anthropic-ai/sdk",
+  "//": "No runtime dependencies. Ollama is accessed through its local HTTP API; static mode uses the deterministic demo engine.",
   "engines": {"node": ">=20"}
 }

@@ -1,3 +1,6 @@
+// Material.ai local decision engine.
+// Runs in the browser or Node with no network, API key, or dependencies.
+
 export const workflows = {
   decide: {
     label: "Decide",
@@ -37,82 +40,110 @@ export const workflows = {
   }
 };
 
+// Longest pronoun alternatives first, each with required trailing space, so
+// "Is it worth…" strips "Is it " rather than the "i" inside "it".
+const LEAD = /^(?:so\s+|ok(?:ay)?,?\s+|hey,?\s+)?(?:should|shall|do|does|did|is|are|was|can|could|would|will|must|ought)\s+(?:(?:they|she|our|you|he|it|we|us|my|i)\s+)?/i;
+const HOWTO = /^(?:how\s+(?:do|should|can|would|might)\s+(?:i|we|you|they)\s*|what(?:'|’)?s\s+the\s+best\s+way\s+to\s+|what\s+is\s+the\s+best\s+way\s+to\s+)/i;
+const TIMING = /^when\s+(?:should|do|can|would|will)\s+(?:i|we|you|they)\s*/i;
+const WORTH = /^(?:is\s+it\s+)?worth\s+/i;
+const SPLIT = /\s+(?:or|vs\.?|versus)\s+/i;
+
+const SIGNALS = {
+  money: /\$\s?[\d,]+|\b\d+\s?k\b|\bbudget|\bcost|\bprice|\bexpensive|\bafford|\bcheap|\bsalary|\bspend|\bpay\b|\bmoney\b|\bfunding\b/i,
+  deadline: /\bdeadline|\bdue\b|\basap\b|\burgent|\b(?:mon|tues|wednes|thurs|fri|satur|sun)day\b|\bby\s+(?:next|the\s+end|then)|\bthis\s+(?:week|month|quarter|year)|\bnext\s+(?:week|month|quarter|year)|\btomorrow\b|\bq[1-4]\b/i,
+  shared: /\bwe\b|\bus\b|\bour\b|\bteam\b|\beveryone\b|\bpartner\b|\bfriends?\b|\bfamily\b|\bcofounder\b|\bboth\s+of\b|\bthe\s+(?:two|three|four)\s+of\b/i,
+  reversible: /\btry\b|\btest\b|\bpilot\b|\btrial\b|\bexperiment|\bprototype|\brent\b|\bborrow|\bbeta\b|\bdraft\b|\bfor\s+now\b/i,
+  irreversible: /\bquit\b|\bsell\b|\bmove\s+(?:to|out|away)|\bmarry|\bfire\b|\bdelete|\bshut\s+down|\bsign\b|\bcontract\b|\bpermanent|\blay\s+off|\bpublish|\bannounce|\bmigrate/i,
+  risk: /\brisk|\bsafe\b|\bdanger|\bfail|\blose\b|\blosing\b|\bdownside|\bworst\s+case|\bregret/i,
+  people: /\bhire\b|\bfire\b|\bteam\b|\bmanager|\breport|\bcofounder\b|\bfriend\b|\brelationship|\bpartner/i
+};
+
 const banks = {
-  travel: {
-    ari: [
-      "Lock the purpose, budget range, and viable dates before choosing a destination. Then compare complete trip packages instead of debating locations in the abstract.",
-      "Treat the trip as a coordination problem first: shared reason, shared budget range, two viable weekends, then destination."
+  frame: {
+    structure: {
+      choice: 'Treat “{a}” and “{b}” as two different bets, not two options. They optimize for different outcomes, and until you name which outcome matters the comparison is unwinnable.',
+      binary: 'The question behind “{subject}” hides two decisions: what outcome you are actually buying, and which tradeoff you will accept to get it.',
+      howto: 'There is no best way to {subject} in the abstract. There is a best way given one goal, one constraint, and one deadline, so fix those three first.',
+      timing: 'Timing questions are usually disguised readiness questions. Define what has to be true before you {subject}, and the date answers itself.',
+      open: 'Break “{subject}” into the decision, the constraint, and the owner. Most of the difficulty here is that all three are still implicit.'
+    },
+    cost: {
+      choice: 'Compare “{a}” and “{b}” on total cost of being wrong, not on which sounds better today. One of them is far cheaper to reverse, and that asymmetry should decide it.',
+      binary: 'Price “{subject}” by its downside, not its upside. The upside is why you are asking; the downside is what you will actually have to live with.',
+      howto: 'Sequence the work on {subject} by what fails loudest. Do the step that would kill the plan first, while stopping is still cheap.',
+      timing: 'The cost of waiting on {subject} is real but invisible, so write it down. Compare it against the cost of moving early with incomplete information.',
+      open: 'Put a number on both sides of “{subject}” — the cost of acting and the cost of doing nothing. The second one is the one people forget.'
+    },
+    evidence: {
+      choice: 'Neither “{a}” nor “{b}” has to be decided in full today. Find the smallest step that produces evidence about which one is right, and take that step instead.',
+      binary: 'Convert “{subject}” from an opinion into a test. Name the one piece of evidence that would flip your answer, then go get it.',
+      howto: 'Build the smallest version of {subject} that tests the riskiest assumption. Anything larger is production work disguised as a decision.',
+      timing: 'Do not pick a date for {subject} yet. Pick the signal that means it is time, and watch for it.',
+      open: 'Turn “{subject}” into an experiment with one owner and one success test. Ambiguity survives discussion; it rarely survives a real trial.'
+    }
+  },
+  constraint: {
+    both: 'You have both a number and a clock in play, which is good news — that makes this bounded. Write the ceiling and the date down before arguing about anything else.',
+    money: 'Cost is doing the real work here. Name the maximum you will spend and the regret trigger that would mean you overpaid.',
+    deadline: 'The timing pressure is the binding constraint. Decide what must be true by that date rather than what would be ideal with unlimited runway.',
+    shared: 'More than one person carries this outcome, so agreement on the goal has to come before agreement on the tactic.',
+    none: 'No hard constraint appears in the question, which usually means the real limit is unstated. Surface it before you choose anything.'
+  },
+  move: {
+    structure: {
+      choice: 'Next move: write one sentence for each option describing the world six months after choosing it.',
+      default: 'Next move: write the decision as a single sentence with an owner and a date attached.'
+    },
+    cost: {
+      choice: 'Next move: list what you lose under each option, then pick the loss you can actually absorb.',
+      default: 'Next move: write down the worst realistic outcome and who absorbs it.'
+    },
+    evidence: {
+      choice: 'Next move: define the cheapest test that would tell you “{a}” is wrong.',
+      default: 'Next move: name the evidence that would change your mind, and the date you will have it.'
+    }
+  },
+  rebut: {
+    structure: [
+      'That is a clean frame and it still postpones the decision. Naming the outcome you are optimizing for is a paragraph of work; you are describing it as if it were the answer.',
+      'Splitting this into decision, constraint, and owner sounds rigorous, but it converts one hard judgment into three easier ones and never makes the hard one.'
     ],
-    mike: [
-      "That optimizes the spreadsheet, not the trip. Decide why everyone actually wants to go before turning friendship into project management.",
-      "Dates first can trap everyone in the worst-priced weekend. Compare complete scenarios before freezing one variable."
+    cost: [
+      'Downside accounting quietly assumes the downside is knowable. The expensive failures here are the ones nobody thought to price.',
+      'Optimizing for cheap-to-reverse systematically picks the timid option. Sometimes the costly, hard-to-undo choice is the only one that actually changes anything.'
     ],
-    final: [
-      "Choose the reason for the trip first, then compare two complete date-budget-destination packages. Protect the friendship by making tradeoffs visible instead of renegotiating them later.",
-      "Agree on purpose and budget, shortlist two complete trip scenarios, and rotate ownership of the remaining decisions."
-    ],
-    assumptions: [
-      "Everyone is willing to state a real budget range.",
-      "The group values a good shared experience more than any single destination.",
-      "At least two viable date windows exist."
+    evidence: [
+      'A small test validates the easy part. It will tell you the mechanics work and nothing about whether this was worth doing.',
+      '“Run an experiment” is what people say when they do not want to state a preference. Some choices need judgment now, not another round of data.'
     ]
   },
-  project: {
-    ari: [
-      "Build the smallest artifact that tests the riskiest assumption. Give it one owner, one deadline, and one explicit success test.",
-      "Separate direction from production. Approve the central idea first, then build only the path that proves it."
-    ],
-    mike: [
-      "Small is not automatically useful. A tiny prototype can validate the easy part and miss the reason the project matters.",
-      "One owner can become approval theater. Pair authority with a named veto criterion and an independent reviewer."
-    ],
-    final: [
-      "Build the smallest version that tests the riskiest creative assumption, with one owner and one failure condition. Write the test before production.",
-      "Approve the premise, assign one owner, and name the condition that kills the idea. Then produce one reviewable artifact."
-    ],
-    assumptions: [
-      "The riskiest assumption can be tested independently.",
-      "A named owner has enough authority to make tradeoffs.",
-      "The team can agree on evidence before seeing the result."
-    ]
+  jab: {
+    reversible: 'You have also already decided it is reversible. Half the things people call a trial are load-bearing within a month.',
+    irreversible: 'And this is not reversible. Whatever process you pick, it has to be one that survives being wrong, because you will not get to retry it.',
+    people: 'This is a people decision wearing an analysis costume. The spreadsheet will be right and the room will still not agree.',
+    risk: 'You named the risk and then routed around it. Say plainly what happens in the bad case and who is holding it.',
+    money: 'And the number is not the constraint you think it is. Sticker price is the smallest part of what this costs over a year.',
+    deadline: 'You are also treating that date as if it were handed down. Ask who set it and what actually breaks if it slips — often the answer is nothing.',
+    shared: 'And the group has not agreed on the question yet, only on the fact that it is unresolved. Process will not fix that; someone stating a preference will.',
+    none: 'Mostly this is still a well-organized way of not answering the question that was asked.'
   },
-  purchase: {
-    ari: [
-      "Define the job, maximum cost, and regret trigger. Compare products against those constraints rather than marketing.",
-      "Buy only if it removes recurring friction or creates a practice you will actually sustain."
-    ],
-    mike: [
-      "A checklist can miss delight, longevity, and taste. Add the question the spreadsheet cannot answer: will you still want to use it?",
-      "Calling it a hobby is not an argument against it. Sometimes the purchase is valuable because it creates a practice."
-    ],
-    final: [
-      "Score utility, longevity, and genuine desire. Compare total ownership rather than sticker price, then wait long enough to see whether the use case survives.",
-      "Buy only when the first three uses are concrete and the total cost, repair risk, and resale downside are acceptable."
-    ],
-    assumptions: [
-      "The intended use will recur often enough to justify ownership.",
-      "The total cost includes accessories, maintenance, and replacement risk.",
-      "Waiting briefly will not remove the opportunity."
-    ]
+  concede: {
+    structure: 'Fair — the frame was doing work the decision should be doing.',
+    cost: 'Granted: pricing the downside can talk you out of the only move that matters.',
+    evidence: 'Correct that a test can validate the wrong half of this.'
   },
-  default: {
-    ari: [
-      "The question hides two decisions: what outcome matters and what tradeoff is acceptable. Make both explicit before choosing a tactic.",
-      "Find the smallest reversible move that creates evidence without locking everyone into the wrong path."
-    ],
-    mike: [
-      "Reversibility is overrated when delay has a cost. Name what gets worse while everyone gathers more evidence.",
-      "That sounds precise but postpones judgment. Some choices require a clear preference, not another experiment."
-    ],
-    final: [
-      "State the preferred outcome, the downside owner, and the cost of waiting. Then choose one action, one owner, and one review condition.",
-      "Use reversible moves where delay is cheap. Where delay compounds risk, make the preference explicit and commit."
-    ],
-    assumptions: [
-      "The desired outcome can be stated more clearly than the current prompt.",
-      "Someone can own the downside if the decision is wrong.",
-      "A review condition can be observed rather than debated."
-    ]
+  rule: {
+    choice: 'So decide it this way: if the two paths differ mostly in cost, take “{a}”; if they differ in what you become, take the one you would defend out loud.',
+    binary: 'So decide it this way: if being wrong is recoverable, act now and correct later; if it is not, buy one round of evidence and no more.',
+    howto: 'So decide it this way: do the step that fails loudest first, and let that result pick the rest of the sequence.',
+    timing: 'So decide it this way: name the one condition that means go, and go the day it is true.',
+    open: 'So decide it this way: state the outcome you want in one sentence, then take the smallest action nobody has to approve.'
+  },
+  close: {
+    deadline: 'Concrete next move: write the one-sentence version of “{subject}” today, with the owner named, and hold it against the date already in play.',
+    shared: 'Concrete next move: each person writes their preferred answer to “{subject}” privately, then compare — you will find you were arguing about different questions.',
+    money: 'Concrete next move: write the ceiling number for “{subject}” down today. If nobody will write it, that is your answer.',
+    default: 'Concrete next move: put “{subject}” in one sentence with an owner and a review date, and send it to the person who can say no.'
   }
 };
 
@@ -149,50 +180,161 @@ export function normalizeDecisionInput(input = {}) {
   };
 }
 
+function tidy(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .replace(/^[\s,;:—-]+/, "")
+    .replace(/[\s,;:.!?]+$/, "")
+    .trim();
+}
+
+function shorten(value, words = 12) {
+  const parts = value.split(" ");
+  return parts.length <= words ? value : `${parts.slice(0, words).join(" ")}…`;
+}
+
+function extractSubject(text) {
+  let subject = tidy(text);
+  for (let pass = 0; pass < 3; pass += 1) {
+    const before = subject;
+    for (const pattern of [HOWTO, TIMING, LEAD, WORTH]) {
+      if (pattern.test(subject)) {
+        const stripped = tidy(subject.replace(pattern, ""));
+        if (stripped) subject = stripped;
+        break;
+      }
+    }
+    if (subject === before) break;
+  }
+  return subject || tidy(text);
+}
+
+function extractOptions(subject) {
+  if (!SPLIT.test(subject)) return [];
+  const parts = subject.split(SPLIT).map(tidy).filter(Boolean);
+  if (parts.length < 2) return [];
+  const usable = parts.filter(part => part.length > 2 && part.split(" ").length <= 12);
+  return usable.length >= 2 ? usable.slice(0, 2).map(part => shorten(part, 8)) : [];
+}
+
+function detectKind(text, options) {
+  if (options.length >= 2) return "choice";
+  if (TIMING.test(text)) return "timing";
+  if (HOWTO.test(text)) return "howto";
+  if (LEAD.test(text) || WORTH.test(text) || /\?\s*$/.test(text)) return "binary";
+  return "open";
+}
+
+export function analyze(prompt) {
+  const text = tidy(prompt);
+  const subject = extractSubject(text);
+  const options = extractOptions(subject);
+  const signals = {};
+  for (const [name, pattern] of Object.entries(SIGNALS)) signals[name] = pattern.test(text);
+
+  return {
+    text,
+    subject: shorten(subject, 14),
+    options,
+    kind: detectKind(text, options),
+    topic: classifyTopic(text),
+    signals,
+    seed: hashString(text.toLowerCase())
+  };
+}
+
 export function calculateConsensus(prompt) {
-  return 34 + (hashString(prompt) % 38);
+  const {signals, kind, options, seed} = analyze(prompt);
+  let score = 50;
+  if (signals.money) score += 9;
+  if (signals.deadline) score += 9;
+  if (options.length >= 2) score += 8;
+  if (signals.reversible) score += 6;
+  if (signals.irreversible) score -= 11;
+  if (signals.risk) score -= 5;
+  if (signals.people) score -= 6;
+  if (kind === "open") score -= 8;
+  score += (seed % 9) - 4;
+  return Math.min(92, Math.max(18, score));
 }
 
 export function calculateConfidence(prompt, input = {}) {
   const normalized = normalizeDecisionInput(input);
-  let confidence = 48 + (hashString(`${prompt}|${normalized.workflow}`) % 23);
-  if (normalized.constraints) confidence += 7;
-  if (normalized.success) confidence += 7;
-  return Math.min(88, confidence);
+  let confidence = calculateConsensus(prompt);
+  if (normalized.constraints) confidence += 6;
+  if (normalized.success) confidence += 6;
+  return Math.min(96, Math.max(18, confidence));
 }
 
-function pick(list, seed, offset = 0) {
-  return list[(seed + offset) % list.length];
+function fill(template, view) {
+  return template.replace(/\{(\w+)\}/g, (match, key) => view[key] ?? match);
 }
 
-function buildAssumptions(bank, seed, input) {
-  const assumptions = [pick(bank.assumptions, seed), pick(bank.assumptions, seed, 1)];
-  if (input.constraints) assumptions[0] = `The stated constraints are real: ${input.constraints}`;
-  if (input.success) assumptions[1] = `Success will be judged by: ${input.success}`;
-  return [...new Set(assumptions)].slice(0, 3);
+function constraintKey(signals) {
+  if (signals.money && signals.deadline) return "both";
+  if (signals.money) return "money";
+  if (signals.deadline) return "deadline";
+  if (signals.shared) return "shared";
+  return "none";
 }
 
-export function simulateDemoDebate(prompt, input = {}) {
+function pickJab(signals) {
+  for (const name of ["reversible", "irreversible", "people", "risk", "money", "deadline", "shared"]) {
+    if (signals[name]) return name;
+  }
+  return "none";
+}
+
+function buildAssumptions(analysis, input) {
+  const assumptions = [];
+  if (input.constraints) assumptions.push(`The stated constraints are real: ${input.constraints}`);
+  if (input.success) assumptions.push(`Success will be judged by: ${input.success}`);
+  if (analysis.options.length >= 2) assumptions.push(`The live choice is between “${analysis.options[0]}” and “${analysis.options[1]}”.`);
+  if (analysis.signals.irreversible) assumptions.push("The decision may be difficult or costly to reverse.");
+  if (analysis.signals.shared) assumptions.push("More than one person owns the outcome.");
+  if (!assumptions.length) assumptions.push("The prompt contains enough context for a first-pass recommendation.");
+  if (assumptions.length < 2) assumptions.push("The next action should create evidence for a later review.");
+  return assumptions.slice(0, 4);
+}
+
+export function runLocalDebate(prompt, input = {}) {
   const cleaned = typeof prompt === "string" ? prompt.trim() : "";
   if (!cleaned) throw new Error("A prompt is required.");
 
   const normalized = normalizeDecisionInput(input);
-  const topic = classifyTopic(cleaned);
+  const analysis = analyze(cleaned);
+  const {kind, options, signals, subject} = analysis;
   const seed = hashString(JSON.stringify({prompt: cleaned, ...normalized}));
-  const bank = banks[topic];
-  const workflow = workflows[normalized.workflow];
-  const opening = `${pick(bank.ari, seed)} ${workflow.instruction}`;
-  const counterpoint = pick(bank.mike, seed, 1);
-  const recommendation = pick(bank.final, seed, 2);
-  const nextAction = pick(workflow.nextActions, seed, 3);
+  const angle = ["structure", "cost", "evidence"][seed % 3];
+  const view = {subject, a: options[0] || subject, b: options[1] || "the alternative"};
+  const opening = [
+    fill(banks.frame[angle][kind], view),
+    fill(banks.constraint[constraintKey(signals)], view),
+    workflows[normalized.workflow].instruction,
+    fill(banks.move[angle][kind === "choice" ? "choice" : "default"], view)
+  ].join(" ");
+  const counterpoint = [
+    banks.rebut[angle][(seed >>> 3) % banks.rebut[angle].length],
+    banks.jab[pickJab(signals)]
+  ].join(" ");
+  const recommendation = [
+    banks.concede[angle],
+    fill(banks.rule[kind], view),
+    fill(banks.close[constraintKey(signals)] || banks.close.default, view)
+  ].join(" ");
+  const specificNextAction = fill(
+    banks.move[angle][kind === "choice" ? "choice" : "default"],
+    view
+  ).replace(/^Next move:\s*/i, "");
   const confidence = calculateConfidence(cleaned, normalized);
 
   return {
-    mode: "demo",
-    model: "Material deterministic engine v2",
+    mode: "local",
+    model: "Material local engine v2",
     workflow: normalized.workflow,
     confidence,
     consensus: confidence,
+    analysis,
     turns: [
       {agent: "ari", label: "ARI / OPENING", text: opening},
       {agent: "mike", label: "MIKE / COUNTERPOINT", text: counterpoint},
@@ -201,8 +343,13 @@ export function simulateDemoDebate(prompt, input = {}) {
     brief: {
       recommendation,
       strongest_objection: counterpoint,
-      assumptions: buildAssumptions(bank, seed, normalized),
-      next_action: nextAction
+      assumptions: buildAssumptions(analysis, normalized),
+      next_action: specificNextAction || workflows[normalized.workflow].nextActions[seed % 2]
     }
   };
+}
+
+// Backward-compatible name retained for V1/V2 browser code and stored sessions.
+export function simulateDemoDebate(prompt, input = {}) {
+  return runLocalDebate(prompt, input);
 }

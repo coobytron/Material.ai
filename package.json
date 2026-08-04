@@ -8,8 +8,6 @@
     "dev": "node --watch server.js",
     "test": "node --test"
   },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.114.0"
-  },
+  "//": "No runtime dependencies. The app runs fully offline. Claude mode is opt-in: npm install @anthropic-ai/sdk",
   "engines": {"node": ">=20"}
 }

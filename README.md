@@ -1,65 +1,49 @@
 # Material.ai
 
-Material.ai is a dual-agent decision lab built around two complementary reasoning systems represented as black and white chess knights:
+Material.ai is a persistent local conversation between two complementary agents represented as black and white chess knights:
 
-- **Ari — White Knight:** strategic synthesis, planning, and pattern recognition.
-- **Mike — Black Knight:** adversarial review, counterarguments, and premise testing.
+- **Ari — White Knight:** answers the question, finds structure, and recommends a direction.
+- **Mike — Black Knight:** responds to Ari’s specific claim, exposes the missing tradeoff, and offers a correction or alternative.
 
-Every prompt becomes a three-move exchange: Ari proposes, Mike challenges, and Ari makes the final move. V2 turns that exchange into a structured decision brief that can be copied, archived, or used as the next step in a real project.
+After every user turn, one local Ollama generation returns Ari, Mike, and a neutral living recap. The conversation remains open for follow-ups instead of ending as a one-shot debate.
 
-## What it produces
+## Current behavior
 
-Each run returns:
-
-- a clear recommendation
-- the strongest objection
-- explicit assumptions
-- one concrete next action
-- a confidence score based on supplied context, not random certainty
-
-## Work modes
-
-- **Decide** — choose a direction and name the tradeoff
-- **Stress-test** — try to break a plan before committing
-- **Plan** — turn an idea into an ordered first move
-- **Compare** — evaluate complete options against shared criteria
-
-Optional constraints and success criteria improve both the debate and the confidence calculation.
-
-## Features
-
-- Responsive monochrome chessboard interface
-- Deterministic local simulation with no dependencies or API key
-- Optional live Claude orchestration through a server-side Anthropic Messages API proxy
-- Shared response contract across Claude and demo modes
-- Automatic fallback from Claude mode to demo mode
-- V1 local-session migration, V2 persistence, Markdown copy, and JSON export
-- Node tests, GitHub Actions CI, and GitHub Pages deployment
-- Server-side request limits, prompt-injection boundaries, and a restrictive Content Security Policy
+- Chronological **You → Ari → Mike** conversation
+- Multiple persistent chat threads in browser storage
+- Living recap with the current answer, both positions, agreement, open questions, and next move
+- One Ollama request per user turn for faster local inference
+- Context trimming that preserves the original question, latest exchanges, and prior recap
+- Strict JSON parsing with one repair attempt and recoverable errors
+- Explicit deterministic demo mode; live failures never silently replace model output
+- New chat, clear current chat, copy recap, and Markdown export
+- No automatic model downloads
 
 ## Run locally
 
-Requires Node.js 20 or newer.
+Requires Node.js 20 or newer and a locally running Ollama server.
 
 ```bash
 git clone https://github.com/coobytron/Material.ai.git
 cd Material.ai
-npm install
 npm test
 npm start
 ```
 
 Open `http://127.0.0.1:3000`.
 
-## Enable Claude mode
+Material.ai checks Ollama at `http://127.0.0.1:11434` and defaults to `mistral-small3.1` when an installed tag with that base name is available.
+
+Optional configuration:
 
 ```bash
-export ANTHROPIC_API_KEY="your-key"
-export ANTHROPIC_MODEL="claude-sonnet-4-6"
+export OLLAMA_URL="http://127.0.0.1:11434"
+export OLLAMA_MODEL="mistral-small3.1"
+export MATERIAL_CONTEXT_CHARS="14000"
 npm start
 ```
 
-The API key remains on the Node server. `ANTHROPIC_MODEL` is configurable so model changes do not require source edits.
+A missing model returns the locally installed model list. Material.ai does not call `ollama pull` or otherwise initiate a download.
 
 ## Static demo
 
@@ -67,44 +51,78 @@ The API key remains on the Node server. `ANTHROPIC_MODEL` is configurable so mod
 python3 -m http.server 8080 --directory public
 ```
 
-The same `public/` folder is deployed to GitHub Pages when changes reach `main`. Static mode uses the deterministic engine and does not need a model provider.
+The static GitHub Pages version uses the explicit deterministic demo engine because it cannot reach a local Ollama process through the Node proxy.
 
-## API contract
+## Chat API
 
-`POST /api/debate`
+`POST /api/chat`
 
 ```json
 {
-  "prompt": "Should we build this?",
-  "workflow": "stress-test",
-  "constraints": "Two weeks, no new dependencies",
-  "success": "Five users complete the workflow"
+  "conversation_id": "chat-id",
+  "model": "mistral-small3.1",
+  "messages": [
+    {"role": "user", "content": "What is the upside to painting versus Photoshop?"},
+    {"role": "ari", "content": "..."},
+    {"role": "mike", "content": "..."},
+    {"role": "user", "content": "I care more about developing taste than speed."}
+  ],
+  "recap": {
+    "question": "What is the upside to painting versus Photoshop?",
+    "current_answer": "..."
+  }
 }
 ```
 
-Successful responses include `turns`, `confidence`, and a `brief` containing `recommendation`, `strongest_objection`, `assumptions`, and `next_action`.
+Response:
+
+```json
+{
+  "model": "mistral-small3.1:latest",
+  "turns": [
+    {"role": "ari", "content": "..."},
+    {"role": "mike", "content": "..."}
+  ],
+  "recap": {
+    "question": "...",
+    "current_answer": "...",
+    "ari_position": "...",
+    "mike_position": "...",
+    "agreement": ["..."],
+    "open_questions": ["..."],
+    "next_move": "..."
+  },
+  "usage": {
+    "context_messages": 7,
+    "original_messages": 10,
+    "context_chars": 8200,
+    "trimmed": true
+  }
+}
+```
 
 ## Architecture
 
 ```text
-public/index.html     semantic interface and decision inputs
-public/styles.css     monochrome responsive design
-public/app.js         state migration, rendering, copy/export, API fallback
-public/engine.js      deterministic workflows and decision-brief engine
-server.js             static server and structured Anthropic proxy
-test/                 dependency-free Node tests
-docs/                 project brief, decision contract, and agent record
+public/index.html       persistent chat and living recap interface
+public/styles.css       core monochrome chess system
+public/v2.css           responsive conversation layout
+public/app.js           thread persistence, rendering, model calls, copy/export
+public/chat-core.js     parser, context trimming, store normalization, exports
+public/engine.js        explicit deterministic demo engine
+server.js               local static server and Ollama chat proxy
+test/                   dependency-free Node tests
 ```
 
-## Privacy
+## Privacy and failure behavior
 
-- Credentials never enter browser code.
-- Demo mode runs locally in the browser.
-- Session history remains in local storage until cleared.
-- Copy and export are user-initiated.
-- Prompt, constraints, request body size, and success-criteria lengths are limited server-side.
-- The application does not ingest or train on private message history.
+- The Node server binds to `127.0.0.1`.
+- Ollama requests remain local by default.
+- Conversation history stays in browser local storage until cleared.
+- Existing `material-ai-v2` decision data is not modified or deleted.
+- Missing Ollama, missing models, timeouts, and malformed JSON return actionable errors.
+- A failed turn leaves the conversation intact.
 
 ## Agent team
 
-The delivery model follows [`coobytron/Agent-Cody-Banks`](https://github.com/coobytron/Agent-Cody-Banks). See [`docs/PROJECT-BRIEF.md`](docs/PROJECT-BRIEF.md) and [`docs/DECISION-BRIEF.md`](docs/DECISION-BRIEF.md).
+This implementation follows [`coobytron/Agent-Cody-Banks`](https://github.com/coobytron/Agent-Cody-Banks): Producer, Product Designer, Writer, AI Specialist, Architect, JavaScript Specialist, and Designer.

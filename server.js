@@ -13,6 +13,14 @@ const ROOT = fileURLToPath(new URL("./public/", import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
 const API_KEY = process.env.ANTHROPIC_API_KEY?.trim() || "";
 const MODEL = process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-6";
+// Mistral runs through the OpenAI-compatible chat endpoint that Ollama, LM
+// Studio, llama.cpp, and vLLM all expose, so any of them work by pointing
+// MISTRAL_BASE_URL at the right port. The default is Ollama's.
+const MISTRAL_URL = (process.env.MISTRAL_BASE_URL?.trim() || "http://127.0.0.1:11434/v1").replace(/\/+$/, "");
+const MISTRAL_MODEL = process.env.MISTRAL_MODEL?.trim() || "mistral";
+const MISTRAL_KEY = process.env.MISTRAL_API_KEY?.trim() || "";
+// A local model that has to load from cold can take a while on the first call.
+const MISTRAL_TIMEOUT = Number(process.env.MISTRAL_TIMEOUT_MS || 120000);
 const types = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -78,7 +86,7 @@ function decisionPacket(question, input) {
   ].join("\n");
 }
 
-async function claude(system, text, {maxTokens = 260, temperature = 0.6} = {}) {
+async function claudeComplete(system, text, {maxTokens = 260, temperature = 0.6} = {}) {
   const message = await client.messages.create({
     model: MODEL,
     max_tokens: maxTokens,
@@ -95,6 +103,52 @@ async function claude(system, text, {maxTokens = 260, temperature = 0.6} = {}) {
   return textOut;
 }
 
+// Uses the built-in fetch so a local model adds no dependency.
+async function mistralComplete(system, text, {maxTokens = 260, temperature = 0.6} = {}) {
+  const response = await fetch(`${MISTRAL_URL}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(MISTRAL_KEY ? {authorization: `Bearer ${MISTRAL_KEY}`} : {})
+    },
+    body: JSON.stringify({
+      model: MISTRAL_MODEL,
+      max_tokens: maxTokens,
+      temperature,
+      stream: false,
+      messages: [{role: "system", content: system}, {role: "user", content: text}]
+    }),
+    signal: AbortSignal.timeout(MISTRAL_TIMEOUT)
+  });
+
+  if (!response.ok) {
+    const detail = (await response.text().catch(() => "")).slice(0, 200);
+    throw Object.assign(new Error(`Mistral responded ${response.status}. ${detail}`.trim()), {status: 502});
+  }
+
+  const data = await response.json();
+  const textOut = (data.choices?.[0]?.message?.content || "").trim();
+  if (!textOut) throw Object.assign(new Error("Mistral returned no text."), {status: 502});
+  return textOut;
+}
+
+// Availability only drives what the UI offers. A debate request always tries
+// the chosen provider and falls back to the local engine if it fails, so
+// starting Ollama after the server does not require a restart.
+let mistralReady = false;
+async function probeMistral() {
+  try {
+    const response = await fetch(`${MISTRAL_URL}/models`, {
+      headers: MISTRAL_KEY ? {authorization: `Bearer ${MISTRAL_KEY}`} : {},
+      signal: AbortSignal.timeout(2000)
+    });
+    mistralReady = response.ok;
+  } catch {
+    mistralReady = false;
+  }
+  return mistralReady;
+}
+
 function parseJsonObject(value) {
   const cleaned = value.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
   const start = cleaned.indexOf("{");
@@ -107,7 +161,7 @@ function parseJsonObject(value) {
   }
 }
 
-function normalizeClaudeBrief(raw, {question, input, mike}) {
+function normalizeModelBrief(raw, {question, input, mike}) {
   const parsed = parseJsonObject(raw) || {};
   const fallbackConfidence = calculateConfidence(question, input);
   const confidence = Number(parsed.confidence);
@@ -137,20 +191,45 @@ function normalizeClaudeBrief(raw, {question, input, mike}) {
   };
 }
 
-async function debate(question, input) {
+// Both hosted and local models run the same three-move orchestration and the
+// same brief contract; only the completion call differs.
+const providers = {
+  claude: {
+    label: "Claude",
+    complete: claudeComplete,
+    get model() { return MODEL; },
+    get available() { return Boolean(client); }
+  },
+  mistral: {
+    label: "Mistral",
+    complete: mistralComplete,
+    get model() { return MISTRAL_MODEL; },
+    get available() { return mistralReady; }
+  }
+};
+
+function pickProvider(requested) {
+  if (requested === "local") return null;
+  if (requested && providers[requested]?.available) return requested;
+  if (requested) return null;
+  return ["claude", "mistral"].find(name => providers[name].available) || null;
+}
+
+async function debate(question, input, name) {
+  const provider = providers[name];
   const packet = decisionPacket(question, input);
-  const ari = await claude(prompts.ari, packet);
-  const mike = await claude(prompts.mike, `${packet}\n\nARI OPENING:\n${ari}`);
-  const rawFinal = await claude(
+  const ari = await provider.complete(prompts.ari, packet);
+  const mike = await provider.complete(prompts.mike, `${packet}\n\nARI OPENING:\n${ari}`);
+  const rawFinal = await provider.complete(
     prompts.final,
     `${packet}\n\nARI OPENING:\n${ari}\n\nMIKE COUNTERPOINT:\n${mike}`,
     {maxTokens: 520, temperature: 0.25}
   );
-  const final = normalizeClaudeBrief(rawFinal, {question, input, mike});
+  const final = normalizeModelBrief(rawFinal, {question, input, mike});
 
   return {
-    mode: "claude",
-    model: MODEL,
+    mode: name,
+    model: provider.model,
     workflow: input.workflow,
     confidence: final.confidence,
     consensus: final.confidence,
@@ -188,11 +267,19 @@ createServer(async (req, res) => {
   try {
     const url = new URL(req.url, "http://localhost");
     if (req.method === "GET" && url.pathname === "/api/status") {
+      await probeMistral();
       return sendJson(res, 200, {
         claude_available: Boolean(client),
         model: client ? MODEL : null,
         local_available: true,
         demo_available: true,
+        mistral_available: mistralReady,
+        mistral_model: mistralReady ? MISTRAL_MODEL : null,
+        providers: {
+          local: {available: true, label: "Local engine", model: "Material local engine v2"},
+          claude: {available: Boolean(client), label: "Claude", model: MODEL},
+          mistral: {available: mistralReady, label: "Mistral", model: MISTRAL_MODEL}
+        },
         decision_brief_version: 2,
         workflows: Object.keys(workflows)
       });
@@ -212,14 +299,15 @@ createServer(async (req, res) => {
         success: cleanString(data.success, 1200)
       });
 
-      if (!client) return sendJson(res, 200, runLocalDebate(prompt, input));
+      const name = pickProvider(cleanString(data.provider, 20));
+      if (!name) return sendJson(res, 200, runLocalDebate(prompt, input));
       try {
-        return sendJson(res, 200, await debate(prompt, input));
+        return sendJson(res, 200, await debate(prompt, input, name));
       } catch (error) {
         console.error(error);
         return sendJson(res, 200, {
           ...runLocalDebate(prompt, input),
-          fallback: "claude_unavailable"
+          fallback: `${name}_unavailable`
         });
       }
     }
@@ -230,6 +318,9 @@ createServer(async (req, res) => {
     console.error(error);
     sendJson(res, error.status || 500, {error: error.status ? error.message : "Unexpected server error."});
   }
-}).listen(PORT, "127.0.0.1", () => {
-  console.log(`Material.ai: http://127.0.0.1:${PORT} (${client ? "Claude" : "local"} mode)`);
+}).listen(PORT, "127.0.0.1", async () => {
+  await probeMistral();
+  const ready = ["local", client ? "Claude" : "", mistralReady ? `Mistral (${MISTRAL_MODEL})` : ""].filter(Boolean);
+  console.log(`Material.ai: http://127.0.0.1:${PORT} — engines: ${ready.join(", ")}`);
+  if (!mistralReady) console.log(`Mistral not reachable at ${MISTRAL_URL} (set MISTRAL_BASE_URL to change).`);
 });

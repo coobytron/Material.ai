@@ -26,9 +26,15 @@ const formStatus = $("#form-status");
 const STORAGE = "material-ai-v2";
 const LEGACY_STORAGE = "material-ai-v1";
 
-let claudeAvailable = false;
-let liveMode = false;
+const ENGINE_ORDER = ["local", "claude", "mistral"];
+const LOCAL_ENGINE = {available: true, label: "Local engine"};
+let engines = {local: LOCAL_ENGINE};
+let engine = "local";
 let session = loadSession();
+
+function availableEngines() {
+  return ENGINE_ORDER.filter(name => engines[name]?.available);
+}
 
 function parseStored(key) {
   try {
@@ -93,11 +99,14 @@ function setNotice(message = "", kind = "") {
 }
 
 function setMode() {
-  liveMode = claudeAvailable && liveMode;
-  modeButton.textContent = liveMode ? "Claude mode" : "Demo mode";
-  modeButton.setAttribute("aria-pressed", String(liveMode));
-  modeButton.title = claudeAvailable ? "Switch reasoning engine" : "Set ANTHROPIC_API_KEY on the local server to enable Claude mode";
-  status.textContent = liveMode ? "live agents ready" : "local engine ready";
+  if (!engines[engine]?.available) engine = "local";
+  const list = availableEngines();
+  modeButton.textContent = engines[engine].label;
+  modeButton.setAttribute("aria-pressed", String(engine !== "local"));
+  modeButton.title = list.length > 1
+    ? `Switch engine: ${list.map(name => engines[name].label).join(" → ")}`
+    : "Local engine only — run a local Mistral or set ANTHROPIC_API_KEY on the Node server";
+  status.textContent = engine === "local" ? "local engine ready" : `${engines[engine].label.toLowerCase()} ready`;
 }
 
 function textNode(tag, className, text) {
@@ -229,11 +238,13 @@ async function checkApi() {
     const response = await fetch("./api/status", {cache: "no-store"});
     if (!response.ok) throw new Error("API unavailable");
     const data = await response.json();
-    claudeAvailable = Boolean(data.claude_available);
-    liveMode = claudeAvailable;
+    engines = {local: LOCAL_ENGINE, ...(data.providers || {})};
+    engines.local = engines.local?.available ? engines.local : LOCAL_ENGINE;
+    // Prefer a real model when one is reachable, otherwise stay local.
+    engine = availableEngines().find(name => name !== "local") || "local";
   } catch {
-    claudeAvailable = false;
-    liveMode = false;
+    engines = {local: LOCAL_ENGINE};
+    engine = "local";
   }
   setMode();
 }
@@ -276,21 +287,29 @@ form.addEventListener("submit", async event => {
 
   try {
     let result;
-    if (liveMode) {
+    if (engine !== "local") {
+      const label = engines[engine].label;
       try {
         const response = await fetch("./api/debate", {
           method: "POST",
           headers: {"content-type": "application/json"},
-          body: JSON.stringify({prompt, ...decisionInput})
+          body: JSON.stringify({prompt, provider: engine, ...decisionInput})
         });
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "Claude request failed.");
+        if (!response.ok) throw new Error(data.error || `${label} request failed.`);
         result = data;
+        // The server answers with the local engine rather than an error when
+        // the model call fails, so surface that instead of silently showing it.
+        if (data.fallback) {
+          engine = "local";
+          setMode();
+          setNotice(`${label} was unavailable, so this decision used the deterministic local engine.`, "warning");
+        }
       } catch {
-        liveMode = false;
+        engine = "local";
         setMode();
         result = simulateDemoDebate(prompt, decisionInput);
-        setNotice("Claude was unavailable, so this decision used the deterministic local engine.", "warning");
+        setNotice(`${label} was unavailable, so this decision used the deterministic local engine.`, "warning");
       }
     } else {
       await new Promise(resolve => setTimeout(resolve, 320));
@@ -318,11 +337,12 @@ form.addEventListener("submit", async event => {
 });
 
 modeButton.addEventListener("click", () => {
-  if (!claudeAvailable) {
-    setNotice("Claude mode requires ANTHROPIC_API_KEY on the local Node server.", "warning");
+  const list = availableEngines();
+  if (list.length < 2) {
+    setNotice("Only the local engine is available. Start a local Mistral, or set ANTHROPIC_API_KEY on the Node server.", "warning");
     return;
   }
-  liveMode = !liveMode;
+  engine = list[(list.indexOf(engine) + 1) % list.length];
   setMode();
   setNotice();
 });

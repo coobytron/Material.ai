@@ -31,8 +31,9 @@ Optional constraints and success criteria improve both the debate and the confid
 - Responsive monochrome chessboard interface
 - Deterministic local simulation with no dependencies or API key
 - Optional live Claude orchestration through a server-side Anthropic Messages API proxy
-- Shared response contract across Claude and demo modes
-- Automatic fallback from Claude mode to demo mode
+- Optional local Mistral through any OpenAI-compatible server (Ollama, LM Studio, llama.cpp, vLLM) — no key, no SDK, no network
+- Shared response contract across every engine
+- Automatic fallback to the local engine whenever a model is unreachable
 - V1 local-session migration, V2 persistence, Markdown copy, and JSON export
 - Node tests, GitHub Actions CI, and GitHub Pages deployment
 - Server-side request limits, prompt-injection boundaries, and a restrictive Content Security Policy
@@ -61,6 +62,35 @@ npm start
 
 The API key remains on the Node server. `ANTHROPIC_MODEL` is configurable so model changes do not require source edits.
 
+## Enable Mistral locally
+
+Any server speaking the OpenAI-compatible `/v1/chat/completions` API works. With
+[Ollama](https://ollama.com) nothing needs configuring:
+
+```bash
+ollama pull mistral
+ollama serve
+npm start
+```
+
+The server probes for a local model at startup and the engine button in the UI
+cycles through whatever is reachable. Point it elsewhere when needed:
+
+```bash
+export MISTRAL_BASE_URL="http://127.0.0.1:1234/v1"   # LM Studio
+export MISTRAL_MODEL="mistral-nemo"
+npm start
+```
+
+Because the model is local, this keeps the app fully offline: no API key, no
+account, and no request leaving the machine. `MISTRAL_API_KEY` is only needed by
+servers that demand one (LM Studio, vLLM); Ollama does not.
+
+Local models are less reliable at strict JSON than hosted ones, so the final
+brief is parsed defensively — fenced code blocks are stripped, and anything
+unparseable degrades to the model's prose plus a locally computed confidence
+rather than failing the request.
+
 ## Static demo
 
 ```bash
@@ -78,11 +108,19 @@ The same `public/` folder is deployed to GitHub Pages when changes reach `main`.
   "prompt": "Should we build this?",
   "workflow": "stress-test",
   "constraints": "Two weeks, no new dependencies",
-  "success": "Five users complete the workflow"
+  "success": "Five users complete the workflow",
+  "provider": "mistral"
 }
 ```
 
-Successful responses include `turns`, `confidence`, and a `brief` containing `recommendation`, `strongest_objection`, `assumptions`, and `next_action`.
+`provider` is optional and accepts `local`, `claude`, or `mistral`. When omitted
+the server uses the best reachable engine. Successful responses include `turns`,
+`confidence`, and a `brief` containing `recommendation`, `strongest_objection`,
+`assumptions`, and `next_action`. When a model is configured but fails, the
+response is still `200` with local-engine content and a `fallback` field naming
+the engine that dropped out.
+
+`GET /api/status` reports which engines are reachable under `providers`.
 
 ## Architecture
 
@@ -91,7 +129,7 @@ public/index.html     semantic interface and decision inputs
 public/styles.css     monochrome responsive design
 public/app.js         state migration, rendering, copy/export, API fallback
 public/engine.js      deterministic workflows and decision-brief engine
-server.js             static server and structured Anthropic proxy
+server.js             static server, engine routing, Anthropic and Mistral proxies
 test/                 dependency-free Node tests
 docs/                 project brief, decision contract, and agent record
 ```

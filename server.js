@@ -17,7 +17,10 @@ const MODEL = process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-6";
 // Studio, llama.cpp, and vLLM all expose, so any of them work by pointing
 // MISTRAL_BASE_URL at the right port. The default is Ollama's.
 const MISTRAL_URL = (process.env.MISTRAL_BASE_URL?.trim() || "http://127.0.0.1:11434/v1").replace(/\/+$/, "");
-const MISTRAL_MODEL = process.env.MISTRAL_MODEL?.trim() || "mistral";
+// Left unset, the model is auto-detected from whatever the server actually has
+// installed, so tag-style names like "mistral-small3.1:latest" need no config.
+const MISTRAL_MODEL_ENV = process.env.MISTRAL_MODEL?.trim() || "";
+let mistralModel = MISTRAL_MODEL_ENV || "mistral";
 const MISTRAL_KEY = process.env.MISTRAL_API_KEY?.trim() || "";
 // A local model that has to load from cold can take a while on the first call.
 const MISTRAL_TIMEOUT = Number(process.env.MISTRAL_TIMEOUT_MS || 120000);
@@ -112,7 +115,7 @@ async function mistralComplete(system, text, {maxTokens = 260, temperature = 0.6
       ...(MISTRAL_KEY ? {authorization: `Bearer ${MISTRAL_KEY}`} : {})
     },
     body: JSON.stringify({
-      model: MISTRAL_MODEL,
+      model: mistralModel,
       max_tokens: maxTokens,
       temperature,
       stream: false,
@@ -136,6 +139,7 @@ async function mistralComplete(system, text, {maxTokens = 260, temperature = 0.6
 // the chosen provider and falls back to the local engine if it fails, so
 // starting Ollama after the server does not require a restart.
 let mistralReady = false;
+let warnedAboutModel = false;
 async function probeMistral() {
   try {
     const response = await fetch(`${MISTRAL_URL}/models`, {
@@ -143,6 +147,22 @@ async function probeMistral() {
       signal: AbortSignal.timeout(2000)
     });
     mistralReady = response.ok;
+    if (!response.ok) return false;
+
+    const data = await response.json().catch(() => ({}));
+    const ids = (Array.isArray(data.data) ? data.data : []).map(item => item?.id).filter(Boolean);
+    if (!ids.length) return mistralReady;
+
+    if (MISTRAL_MODEL_ENV) {
+      // An unreachable model name would otherwise look "available" here and
+      // fail on every debate, so say so once at startup.
+      if (!ids.includes(MISTRAL_MODEL_ENV) && !warnedAboutModel) {
+        warnedAboutModel = true;
+        console.warn(`MISTRAL_MODEL="${MISTRAL_MODEL_ENV}" was not found. Installed: ${ids.join(", ")}`);
+      }
+    } else {
+      mistralModel = ids.find(id => /mistral/i.test(id)) || ids[0];
+    }
   } catch {
     mistralReady = false;
   }
@@ -203,7 +223,7 @@ const providers = {
   mistral: {
     label: "Mistral",
     complete: mistralComplete,
-    get model() { return MISTRAL_MODEL; },
+    get model() { return mistralModel; },
     get available() { return mistralReady; }
   }
 };
@@ -274,11 +294,11 @@ createServer(async (req, res) => {
         local_available: true,
         demo_available: true,
         mistral_available: mistralReady,
-        mistral_model: mistralReady ? MISTRAL_MODEL : null,
+        mistral_model: mistralReady ? mistralModel : null,
         providers: {
           local: {available: true, label: "Local engine", model: "Material local engine v2"},
           claude: {available: Boolean(client), label: "Claude", model: MODEL},
-          mistral: {available: mistralReady, label: "Mistral", model: MISTRAL_MODEL}
+          mistral: {available: mistralReady, label: "Mistral", model: mistralModel}
         },
         decision_brief_version: 2,
         workflows: Object.keys(workflows)
@@ -320,7 +340,7 @@ createServer(async (req, res) => {
   }
 }).listen(PORT, "127.0.0.1", async () => {
   await probeMistral();
-  const ready = ["local", client ? "Claude" : "", mistralReady ? `Mistral (${MISTRAL_MODEL})` : ""].filter(Boolean);
+  const ready = ["local", client ? "Claude" : "", mistralReady ? `Mistral (${mistralModel})` : ""].filter(Boolean);
   console.log(`Material.ai: http://127.0.0.1:${PORT} — engines: ${ready.join(", ")}`);
   if (!mistralReady) console.log(`Mistral not reachable at ${MISTRAL_URL} (set MISTRAL_BASE_URL to change).`);
 });

@@ -74,13 +74,18 @@ npm start
 ```
 
 The server probes for a local model at startup and the engine button in the UI
-cycles through whatever is reachable. Point it elsewhere when needed:
+cycles through whatever is reachable. The model name is auto-detected from what
+the server actually has installed, tag included, so `mistral-small3.1:latest`
+works without configuration. Pin a specific one only if you want to:
 
 ```bash
 export MISTRAL_BASE_URL="http://127.0.0.1:1234/v1"   # LM Studio
-export MISTRAL_MODEL="mistral-nemo"
+export MISTRAL_MODEL="mistral-small3.1:latest"        # optional
 npm start
 ```
+
+A pinned name that is not installed is reported at startup with the list of
+models that are, rather than failing silently on every debate.
 
 Because the model is local, this keeps the app fully offline: no API key, no
 account, and no request leaving the machine. `MISTRAL_API_KEY` is only needed by

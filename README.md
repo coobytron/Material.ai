@@ -5,99 +5,106 @@ Material.ai is a dual-agent decision lab built around two complementary reasonin
 - **Ari — White Knight:** strategic synthesis, planning, and pattern recognition.
 - **Mike — Black Knight:** adversarial review, counterarguments, and premise testing.
 
-Every prompt becomes a three-move exchange: Ari proposes, Mike challenges, and Ari makes the final move.
+Every prompt becomes a three-move exchange: Ari proposes, Mike challenges, and Ari makes the final move. V2 turns that exchange into a structured decision brief that can be copied, archived, or used as the next step in a real project.
+
+## What it produces
+
+Each run returns:
+
+- a clear recommendation
+- the strongest objection
+- explicit assumptions
+- one concrete next action
+- a confidence score based on supplied context, not random certainty
+
+## Work modes
+
+- **Decide** — choose a direction and name the tradeoff
+- **Stress-test** — try to break a plan before committing
+- **Plan** — turn an idea into an ordered first move
+- **Compare** — evaluate complete options against shared criteria
+
+Optional constraints and success criteria improve both the debate and the confidence calculation.
 
 ## Features
 
-- Runs entirely offline: no API key, no account, no network, no dependencies
-- Local engine that reads the prompt and builds the debate from its structure
 - Responsive monochrome chessboard interface
+- Deterministic local simulation with no dependencies or API key
 - Optional live Claude orchestration through a server-side Anthropic Messages API proxy
-- Automatic fallback from Claude mode to the local engine
-- Local session persistence and JSON transcript export
+- Shared response contract across Claude and demo modes
+- Automatic fallback from Claude mode to demo mode
+- V1 local-session migration, V2 persistence, Markdown copy, and JSON export
 - Node tests, GitHub Actions CI, and GitHub Pages deployment
-- Server-side request limits and a restrictive Content Security Policy
+- Server-side request limits, prompt-injection boundaries, and a restrictive Content Security Policy
 
 ## Run locally
 
-Requires Node.js 20 or newer. Nothing else.
+Requires Node.js 20 or newer.
 
 ```bash
 git clone https://github.com/coobytron/Material.ai.git
 cd Material.ai
+npm install
 npm test
 npm start
 ```
 
-Open `http://127.0.0.1:3000`. There is no install step because there are no
-dependencies, and no key is required — the local engine answers every prompt.
+Open `http://127.0.0.1:3000`.
 
-## How the local engine works
-
-The engine in `public/engine.js` is not a canned response list. For each prompt
-it extracts the decision structure, then composes the exchange from what it
-found:
-
-- **Question kind** — a choice between options, a yes/no, a how-to, a timing
-  question, or an open statement.
-- **Options** — `"ship Friday or wait two weeks"` becomes two named paths that
-  both agents argue about by name.
-- **Signals** — money, deadlines, shared ownership, reversibility, and risk,
-  each pulled from the wording of the question.
-
-Ari picks an angle (structure, cost, or evidence) and Mike rebuts *that angle
-specifically* rather than answering in general. Consensus is derived from how
-far apart the two positions land: concrete constraints and reversible stakes
-raise it, irreversible or open-ended questions lower it.
-
-The same prompt always produces the same debate; different prompts do not.
-
-## Optional: enable Claude mode
+## Enable Claude mode
 
 ```bash
-npm install @anthropic-ai/sdk
 export ANTHROPIC_API_KEY="your-key"
 export ANTHROPIC_MODEL="claude-sonnet-4-6"
 npm start
 ```
 
-The API key remains on the Node server. `ANTHROPIC_MODEL` is configurable so
-model changes do not require source edits. If the SDK is missing, the key is
-absent, or a request fails, the server serves the local engine instead of an
-error.
+The API key remains on the Node server. `ANTHROPIC_MODEL` is configurable so model changes do not require source edits.
 
-## Static, serverless deployment
-
-The engine runs in the browser, so `public/` is a complete working app with no
-backend at all:
+## Static demo
 
 ```bash
 python3 -m http.server 8080 --directory public
 ```
 
-The same folder is deployed to GitHub Pages when changes reach `main`.
+The same `public/` folder is deployed to GitHub Pages when changes reach `main`. Static mode uses the deterministic engine and does not need a model provider.
+
+## API contract
+
+`POST /api/debate`
+
+```json
+{
+  "prompt": "Should we build this?",
+  "workflow": "stress-test",
+  "constraints": "Two weeks, no new dependencies",
+  "success": "Five users complete the workflow"
+}
+```
+
+Successful responses include `turns`, `confidence`, and a `brief` containing `recommendation`, `strongest_objection`, `assumptions`, and `next_action`.
 
 ## Architecture
 
 ```text
-public/index.html     semantic interface
+public/index.html     semantic interface and decision inputs
 public/styles.css     monochrome responsive design
-public/app.js         state, persistence, export, Claude fallback
-public/engine.js      local Ari/Mike engine (no dependencies, runs anywhere)
-server.js             static server, local engine, optional Anthropic proxy
+public/app.js         state migration, rendering, copy/export, API fallback
+public/engine.js      deterministic workflows and decision-brief engine
+server.js             static server and structured Anthropic proxy
 test/                 dependency-free Node tests
-docs/                 project brief and agent record
+docs/                 project brief, decision contract, and agent record
 ```
 
 ## Privacy
 
-- No credentials are required to use the app at all.
 - Credentials never enter browser code.
-- Local mode runs entirely in the browser and sends nothing anywhere.
+- Demo mode runs locally in the browser.
 - Session history remains in local storage until cleared.
-- Transcript export is user-initiated.
-- Prompt length and request body size are limited server-side.
+- Copy and export are user-initiated.
+- Prompt, constraints, request body size, and success-criteria lengths are limited server-side.
+- The application does not ingest or train on private message history.
 
 ## Agent team
 
-The delivery model follows [`coobytron/Agent-Cody-Banks`](https://github.com/coobytron/Agent-Cody-Banks). See [`docs/PROJECT-BRIEF.md`](docs/PROJECT-BRIEF.md).
+The delivery model follows [`coobytron/Agent-Cody-Banks`](https://github.com/coobytron/Agent-Cody-Banks). See [`docs/PROJECT-BRIEF.md`](docs/PROJECT-BRIEF.md) and [`docs/DECISION-BRIEF.md`](docs/DECISION-BRIEF.md).

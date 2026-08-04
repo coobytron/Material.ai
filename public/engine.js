@@ -1,8 +1,44 @@
-// Material.ai local engine.
-// Runs entirely in the browser or in Node with no network, no API key, and no
-// dependencies. It reads the prompt, extracts the decision structure, and
-// composes an Ari -> Mike -> Ari exchange from that structure, so the same
-// question always returns the same debate and different questions do not.
+// Material.ai local decision engine.
+// Runs in the browser or Node with no network, API key, or dependencies.
+
+export const workflows = {
+  decide: {
+    label: "Decide",
+    description: "Choose a direction and name the tradeoff.",
+    instruction: "Make a clear recommendation instead of only listing options.",
+    nextActions: [
+      "Write the decision, assign one owner, and set a date to review whether it worked.",
+      "Commit to the preferred option for one review cycle and record the condition that would reverse it."
+    ]
+  },
+  "stress-test": {
+    label: "Stress-test",
+    description: "Try to break a plan before committing.",
+    instruction: "Treat the proposal as a hypothesis and look for the cheapest way to disprove it.",
+    nextActions: [
+      "Run the cheapest test that could disprove the recommendation before investing further.",
+      "Name the most dangerous assumption, assign an owner, and test it with real evidence."
+    ]
+  },
+  plan: {
+    label: "Plan",
+    description: "Turn an idea into an ordered first move.",
+    instruction: "Sequence the work around dependencies, ownership, and review gates.",
+    nextActions: [
+      "Put the first milestone on the calendar with one owner, one deliverable, and one acceptance test.",
+      "Start the dependency that can block everything else, then schedule the first integration review."
+    ]
+  },
+  compare: {
+    label: "Compare",
+    description: "Evaluate complete options against shared criteria.",
+    instruction: "Compare complete scenarios rather than isolated features.",
+    nextActions: [
+      "Score the two strongest options against the same three criteria and choose the winner by a fixed deadline.",
+      "Remove any option that violates a hard constraint, then compare the survivors by total cost and reversibility."
+    ]
+  }
+};
 
 // Longest pronoun alternatives first, each with required trailing space, so
 // "Is it worth…" strips "Is it " rather than the "i" inside "it".
@@ -46,7 +82,6 @@ const banks = {
       open: 'Turn “{subject}” into an experiment with one owner and one success test. Ambiguity survives discussion; it rarely survives a real trial.'
     }
   },
-
   constraint: {
     both: 'You have both a number and a clock in play, which is good news — that makes this bounded. Write the ceiling and the date down before arguing about anything else.',
     money: 'Cost is doing the real work here. Name the maximum you will spend and the regret trigger that would mean you overpaid.',
@@ -54,7 +89,6 @@ const banks = {
     shared: 'More than one person carries this outcome, so agreement on the goal has to come before agreement on the tactic.',
     none: 'No hard constraint appears in the question, which usually means the real limit is unstated. Surface it before you choose anything.'
   },
-
   move: {
     structure: {
       choice: 'Next move: write one sentence for each option describing the world six months after choosing it.',
@@ -69,7 +103,6 @@ const banks = {
       default: 'Next move: name the evidence that would change your mind, and the date you will have it.'
     }
   },
-
   rebut: {
     structure: [
       'That is a clean frame and it still postpones the decision. Naming the outcome you are optimizing for is a paragraph of work; you are describing it as if it were the answer.',
@@ -84,7 +117,6 @@ const banks = {
       '“Run an experiment” is what people say when they do not want to state a preference. Some choices need judgment now, not another round of data.'
     ]
   },
-
   jab: {
     reversible: 'You have also already decided it is reversible. Half the things people call a trial are load-bearing within a month.',
     irreversible: 'And this is not reversible. Whatever process you pick, it has to be one that survives being wrong, because you will not get to retry it.',
@@ -95,13 +127,11 @@ const banks = {
     shared: 'And the group has not agreed on the question yet, only on the fact that it is unresolved. Process will not fix that; someone stating a preference will.',
     none: 'Mostly this is still a well-organized way of not answering the question that was asked.'
   },
-
   concede: {
     structure: 'Fair — the frame was doing work the decision should be doing.',
     cost: 'Granted: pricing the downside can talk you out of the only move that matters.',
     evidence: 'Correct that a test can validate the wrong half of this.'
   },
-
   rule: {
     choice: 'So decide it this way: if the two paths differ mostly in cost, take “{a}”; if they differ in what you become, take the one you would defend out loud.',
     binary: 'So decide it this way: if being wrong is recoverable, act now and correct later; if it is not, buy one round of evidence and no more.',
@@ -109,7 +139,6 @@ const banks = {
     timing: 'So decide it this way: name the one condition that means go, and go the day it is true.',
     open: 'So decide it this way: state the outcome you want in one sentence, then take the smallest action nobody has to approve.'
   },
-
   close: {
     deadline: 'Concrete next move: write the one-sentence version of “{subject}” today, with the owner named, and hold it against the date already in play.',
     shared: 'Concrete next move: each person writes their preferred answer to “{subject}” privately, then compare — you will find you were arguing about different questions.',
@@ -130,13 +159,29 @@ export function hashString(value) {
 export function classifyTopic(prompt) {
   const text = prompt.toLowerCase();
   if (/\b(trip|travel|vacation|flight|hotel|weekend)\b/.test(text)) return "travel";
-  if (/\b(project|build|launch|design|app|website|repo|feature)\b/.test(text)) return "project";
-  if (/\b(buy|purchase|cost|price|worth|upgrade)\b/.test(text)) return "purchase";
+  if (/\b(project|build|launch|design|app|website|repo|feature|prototype)\b/.test(text)) return "project";
+  if (/\b(buy|purchase|cost|price|worth|upgrade|product)\b/.test(text)) return "purchase";
   return "default";
 }
 
+export function normalizeWorkflow(value) {
+  return Object.hasOwn(workflows, value) ? value : "decide";
+}
+
+function cleanOptional(value, limit = 1200) {
+  return typeof value === "string" ? value.trim().slice(0, limit) : "";
+}
+
+export function normalizeDecisionInput(input = {}) {
+  return {
+    workflow: normalizeWorkflow(input.workflow),
+    constraints: cleanOptional(input.constraints),
+    success: cleanOptional(input.success)
+  };
+}
+
 function tidy(value) {
-  return value
+  return String(value || "")
     .replace(/\s+/g, " ")
     .replace(/^[\s,;:—-]+/, "")
     .replace(/[\s,;:.!?]+$/, "")
@@ -213,6 +258,14 @@ export function calculateConsensus(prompt) {
   return Math.min(92, Math.max(18, score));
 }
 
+export function calculateConfidence(prompt, input = {}) {
+  const normalized = normalizeDecisionInput(input);
+  let confidence = calculateConsensus(prompt);
+  if (normalized.constraints) confidence += 6;
+  if (normalized.success) confidence += 6;
+  return Math.min(96, Math.max(18, confidence));
+}
+
 function fill(template, view) {
   return template.replace(/\{(\w+)\}/g, (match, key) => view[key] ?? match);
 }
@@ -232,36 +285,71 @@ function pickJab(signals) {
   return "none";
 }
 
-export function runLocalDebate(prompt) {
-  if (!prompt?.trim()) throw new Error("A prompt is required.");
-  const analysis = analyze(prompt);
-  const {kind, options, signals, seed, subject} = analysis;
+function buildAssumptions(analysis, input) {
+  const assumptions = [];
+  if (input.constraints) assumptions.push(`The stated constraints are real: ${input.constraints}`);
+  if (input.success) assumptions.push(`Success will be judged by: ${input.success}`);
+  if (analysis.options.length >= 2) assumptions.push(`The live choice is between “${analysis.options[0]}” and “${analysis.options[1]}”.`);
+  if (analysis.signals.irreversible) assumptions.push("The decision may be difficult or costly to reverse.");
+  if (analysis.signals.shared) assumptions.push("More than one person owns the outcome.");
+  if (!assumptions.length) assumptions.push("The prompt contains enough context for a first-pass recommendation.");
+  if (assumptions.length < 2) assumptions.push("The next action should create evidence for a later review.");
+  return assumptions.slice(0, 4);
+}
+
+export function runLocalDebate(prompt, input = {}) {
+  const cleaned = typeof prompt === "string" ? prompt.trim() : "";
+  if (!cleaned) throw new Error("A prompt is required.");
+
+  const normalized = normalizeDecisionInput(input);
+  const analysis = analyze(cleaned);
+  const {kind, options, signals, subject} = analysis;
+  const seed = hashString(JSON.stringify({prompt: cleaned, ...normalized}));
   const angle = ["structure", "cost", "evidence"][seed % 3];
   const view = {subject, a: options[0] || subject, b: options[1] || "the alternative"};
   const opening = [
     fill(banks.frame[angle][kind], view),
     fill(banks.constraint[constraintKey(signals)], view),
+    workflows[normalized.workflow].instruction,
     fill(banks.move[angle][kind === "choice" ? "choice" : "default"], view)
   ].join(" ");
-  const rebut = [
+  const counterpoint = [
     banks.rebut[angle][(seed >>> 3) % banks.rebut[angle].length],
     banks.jab[pickJab(signals)]
   ].join(" ");
-  const final = [
+  const recommendation = [
     banks.concede[angle],
     fill(banks.rule[kind], view),
     fill(banks.close[constraintKey(signals)] || banks.close.default, view)
   ].join(" ");
+  const specificNextAction = fill(
+    banks.move[angle][kind === "choice" ? "choice" : "default"],
+    view
+  ).replace(/^Next move:\s*/i, "");
+  const confidence = calculateConfidence(cleaned, normalized);
 
   return {
     mode: "local",
-    model: "material-local-v2",
-    consensus: calculateConsensus(prompt),
+    model: "Material local engine v2",
+    workflow: normalized.workflow,
+    confidence,
+    consensus: confidence,
     analysis,
     turns: [
-      {agent:"ari",label:"ARI / OPENING",text:opening},
-      {agent:"mike",label:"MIKE / COUNTERPOINT",text:rebut},
-      {agent:"ari",label:"ARI / FINAL MOVE",text:final}
-    ]
+      {agent: "ari", label: "ARI / OPENING", text: opening},
+      {agent: "mike", label: "MIKE / COUNTERPOINT", text: counterpoint},
+      {agent: "ari", label: "ARI / FINAL MOVE", text: recommendation}
+    ],
+    brief: {
+      recommendation,
+      strongest_objection: counterpoint,
+      assumptions: buildAssumptions(analysis, normalized),
+      next_action: specificNextAction || workflows[normalized.workflow].nextActions[seed % 2]
+    }
   };
+}
+
+// Backward-compatible name retained for V1/V2 browser code and stored sessions.
+export function simulateDemoDebate(prompt, input = {}) {
+  return runLocalDebate(prompt, input);
 }

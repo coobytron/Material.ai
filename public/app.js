@@ -1,34 +1,45 @@
+import {runLocalDebate} from "./engine.js";
 import {
-  calculateConfidence,
-  normalizeDecisionInput,
-  simulateDemoDebate,
-  workflows
-} from "./engine.js";
+  conversationAsMarkdown,
+  createConversation,
+  messagePresentation,
+  normalizeRecap,
+  normalizeStore,
+  recapAsMarkdown,
+  titleFromMessage
+} from "./chat-core.js";
 
 const $ = selector => document.querySelector(selector);
-const form = $("#prompt-form");
-const input = $("#prompt");
-const workflowInput = $("#workflow");
-const constraintsInput = $("#constraints");
-const successInput = $("#success");
 const transcript = $("#transcript");
 const empty = $("#empty-state");
-const run = $("#run");
-const modeButton = $("#mode-toggle");
-const clear = $("#clear");
-const exportButton = $("#export");
-const status = $("#status");
-const model = $("#model");
-const confidence = $("#consensus");
-const confidenceFill = $("#consensus-fill");
-const count = $("#count");
+const form = $("#prompt-form");
+const input = $("#prompt");
+const send = $("#send");
 const formStatus = $("#form-status");
-const STORAGE = "material-ai-v2";
-const LEGACY_STORAGE = "material-ai-v1";
+const modeButton = $("#mode-toggle");
+const status = $("#status");
+const modelSelect = $("#model-select");
+const count = $("#count");
+const threadSelect = $("#thread-select");
+const newChatButton = $("#new-chat");
+const clearButton = $("#clear-chat");
+const copyRecapButton = $("#copy-recap");
+const exportButton = $("#export-conversation");
+const recapPanel = $("#recap");
+const recapQuestion = $("#recap-question");
+const recapAnswer = $("#recap-answer");
+const recapAri = $("#recap-ari");
+const recapMike = $("#recap-mike");
+const recapAgreement = $("#recap-agreement");
+const recapQuestions = $("#recap-questions");
+const recapNext = $("#recap-next");
 
-let claudeAvailable = false;
-let liveMode = false;
-let session = loadSession();
+const STORAGE = "material-ai-chat-v1";
+const MODE_STORAGE = "material-ai-engine-v1";
+let store = loadStore();
+let api = {checked: false, ollama_available: false, configured_model: "mistral-small3.1", selected_model: "", models: []};
+let mode = localStorage.getItem(MODE_STORAGE) === "demo" ? "demo" : "ollama";
+let generating = false;
 
 function parseStored(key) {
   try {
@@ -38,66 +49,32 @@ function parseStored(key) {
   }
 }
 
-function normalizeBrief(entry) {
-  const turns = Array.isArray(entry.turns) ? entry.turns : [];
-  const ariFinal = [...turns].reverse().find(turn => turn.agent === "ari")?.text || "No recommendation recorded.";
-  const mike = turns.find(turn => turn.agent === "mike")?.text || "No objection recorded.";
-  const brief = entry.brief && typeof entry.brief === "object" ? entry.brief : {};
-  const assumptions = Array.isArray(brief.assumptions)
-    ? brief.assumptions.filter(item => typeof item === "string" && item.trim()).slice(0, 4)
-    : [];
-
-  return {
-    recommendation: brief.recommendation || ariFinal,
-    strongest_objection: brief.strongest_objection || mike,
-    assumptions: assumptions.length ? assumptions : ["This is a first-pass recommendation based only on the supplied prompt."],
-    next_action: brief.next_action || "Assign one owner and define the condition for reviewing this decision."
-  };
+function makeId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function normalizeEntry(entry = {}) {
-  const decisionInput = normalizeDecisionInput(entry);
-  const prompt = typeof entry.prompt === "string" ? entry.prompt : "Untitled decision";
-  const rawConfidence = Number(entry.confidence ?? entry.consensus);
-  const safeConfidence = Number.isFinite(rawConfidence)
-    ? Math.max(0, Math.min(100, Math.round(rawConfidence)))
-    : calculateConfidence(prompt, decisionInput);
-
-  return {
-    prompt,
-    workflow: decisionInput.workflow,
-    constraints: decisionInput.constraints,
-    success: decisionInput.success,
-    model: typeof entry.model === "string" ? entry.model : "Material deterministic engine v2",
-    confidence: safeConfidence,
-    turns: Array.isArray(entry.turns) ? entry.turns : [],
-    brief: normalizeBrief(entry),
-    created_at: entry.created_at || new Date().toISOString()
-  };
-}
-
-function loadSession() {
-  const current = parseStored(STORAGE);
-  const legacy = parseStored(LEGACY_STORAGE);
-  const source = current?.entries ? current : legacy?.entries ? legacy : {entries: []};
-  return {entries: source.entries.map(normalizeEntry).slice(-12)};
+function loadStore() {
+  const normalized = normalizeStore(parseStored(STORAGE));
+  if (!normalized.conversations.length) {
+    const conversation = createConversation({id: makeId()});
+    normalized.conversations.push(conversation);
+    normalized.active_id = conversation.id;
+  }
+  return normalized;
 }
 
 function save() {
-  localStorage.setItem(STORAGE, JSON.stringify(session));
+  localStorage.setItem(STORAGE, JSON.stringify(store));
+}
+
+function activeConversation() {
+  return store.conversations.find(item => item.id === store.active_id) || store.conversations.at(-1);
 }
 
 function setNotice(message = "", kind = "") {
   formStatus.textContent = message;
   formStatus.dataset.kind = kind;
-}
-
-function setMode() {
-  liveMode = claudeAvailable && liveMode;
-  modeButton.textContent = liveMode ? "Claude mode" : "Demo mode";
-  modeButton.setAttribute("aria-pressed", String(liveMode));
-  modeButton.title = claudeAvailable ? "Switch reasoning engine" : "Set ANTHROPIC_API_KEY on the local server to enable Claude mode";
-  status.textContent = liveMode ? "live agents ready" : "local engine ready";
 }
 
 function textNode(tag, className, text) {
@@ -107,140 +84,116 @@ function textNode(tag, className, text) {
   return node;
 }
 
-function renderQuery(entry, entryIndex) {
-  const query = document.createElement("div");
-  query.className = "query";
-
-  const meta = document.createElement("div");
-  meta.className = "query-meta";
-  meta.append(
-    textNode("span", "", `QUERY ${String(entryIndex + 1).padStart(2, "0")}`),
-    textNode("span", "", workflows[entry.workflow].label.toUpperCase())
-  );
-  query.append(meta, textNode("p", "", entry.prompt));
-
-  if (entry.constraints || entry.success) {
-    const context = document.createElement("dl");
-    context.className = "query-context";
-    if (entry.constraints) {
-      const group = document.createElement("div");
-      group.append(textNode("dt", "", "Constraints"), textNode("dd", "", entry.constraints));
-      context.append(group);
-    }
-    if (entry.success) {
-      const group = document.createElement("div");
-      group.append(textNode("dt", "", "Success"), textNode("dd", "", entry.success));
-      context.append(group);
-    }
-    query.append(context);
-  }
-
-  return query;
+function formatTime(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? "" : date.toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
 }
 
-function renderTurn(turn, index) {
-  const node = document.createElement("article");
-  node.className = `turn ${turn.agent === "mike" ? "mike" : "ari"}`;
-  node.style.setProperty("--delay", `${index * 90}ms`);
-
-  const identity = document.createElement("div");
-  identity.append(
-    textNode("b", "", turn.agent === "mike" ? "♞" : "♘"),
-    textNode("span", "", turn.label || (turn.agent === "mike" ? "MIKE" : "ARI"))
-  );
-  node.append(identity, textNode("p", "", turn.text || ""));
-  return node;
+function renderThreads() {
+  threadSelect.replaceChildren();
+  [...store.conversations].reverse().forEach(conversation => {
+    const option = document.createElement("option");
+    option.value = conversation.id;
+    option.textContent = conversation.title;
+    option.selected = conversation.id === store.active_id;
+    threadSelect.append(option);
+  });
 }
 
-function renderBrief(entry, entryIndex) {
-  const card = document.createElement("section");
-  card.className = "decision-brief";
+function renderMessages(conversation) {
+  transcript.querySelectorAll(".message").forEach(node => node.remove());
+  empty.hidden = conversation.messages.length > 0;
 
-  const head = document.createElement("header");
-  const title = document.createElement("div");
-  title.append(
-    textNode("p", "eyebrow", `DECISION BRIEF / ${workflows[entry.workflow].label.toUpperCase()}`),
-    textNode("h3", "", "The usable answer")
-  );
+  conversation.messages.forEach(message => {
+    const presentation = messagePresentation(message.role);
+    const article = document.createElement("article");
+    article.className = `message ${presentation.className}`;
 
-  const actions = document.createElement("div");
-  actions.className = "brief-actions";
-  actions.append(textNode("b", "confidence-badge", `${entry.confidence}% confidence`));
-  const copyButton = textNode("button", "copy-brief", "Copy brief");
-  copyButton.type = "button";
-  copyButton.dataset.copyEntry = String(entryIndex);
-  actions.append(copyButton);
-  head.append(title, actions);
-
-  const grid = document.createElement("div");
-  grid.className = "brief-grid";
-
-  const fields = [
-    ["Recommendation", entry.brief.recommendation, "wide"],
-    ["Strongest objection", entry.brief.strongest_objection, ""],
-    ["Next action", entry.brief.next_action, "next"]
-  ];
-
-  fields.forEach(([label, value, className]) => {
-    const field = document.createElement("article");
-    field.className = className;
-    field.append(textNode("small", "", label), textNode("p", "", value));
-    grid.append(field);
+    const head = document.createElement("header");
+    head.append(
+      textNode("b", "message-icon", presentation.icon),
+      textNode("span", "message-name", presentation.label),
+      textNode("time", "message-time", formatTime(message.created_at))
+    );
+    article.append(head, textNode("p", "message-content", message.content));
+    transcript.append(article);
   });
 
-  const assumptions = document.createElement("article");
-  assumptions.className = "assumptions";
-  assumptions.append(textNode("small", "", "Assumptions"));
-  const list = document.createElement("ul");
-  entry.brief.assumptions.forEach(item => list.append(textNode("li", "", item)));
-  assumptions.append(list);
-  grid.append(assumptions);
+  transcript.scrollTop = transcript.scrollHeight;
+}
 
-  card.append(head, grid);
-  return card;
+function renderList(node, values, emptyLabel) {
+  node.replaceChildren();
+  const items = values.length ? values : [emptyLabel];
+  items.forEach(value => node.append(textNode("li", "", value)));
+}
+
+function renderRecap(conversation) {
+  const recap = normalizeRecap(conversation.recap);
+  recapQuestion.textContent = recap.question || "The first question will appear here.";
+  recapAnswer.textContent = recap.current_answer || "The living answer updates after Ari and Mike respond.";
+  recapAri.textContent = recap.ari_position || "No position yet.";
+  recapMike.textContent = recap.mike_position || "No counterpoint yet.";
+  recapNext.textContent = recap.next_move || "No next move yet.";
+  renderList(recapAgreement, recap.agreement, "No agreement recorded yet.");
+  renderList(recapQuestions, recap.open_questions, "No open questions recorded yet.");
+  recapPanel.dataset.empty = String(!recap.current_answer);
+}
+
+function renderEngine() {
+  const ollamaReady = api.ollama_available && api.models.length > 0;
+  if (api.checked && mode === "ollama" && !ollamaReady) mode = "demo";
+  localStorage.setItem(MODE_STORAGE, mode);
+
+  modeButton.textContent = mode === "ollama" ? "Ollama mode" : "Local demo";
+  modeButton.setAttribute("aria-pressed", String(mode === "ollama"));
+  status.textContent = !api.checked
+    ? "checking local model"
+    : mode === "ollama"
+      ? "local agents ready"
+      : api.ollama_available ? "deterministic demo" : "demo / Ollama offline";
+  modelSelect.disabled = mode !== "ollama" || !api.models.length;
+}
+
+function renderModelOptions() {
+  modelSelect.replaceChildren();
+  const models = api.models.length ? api.models : [api.configured_model || "mistral-small3.1"];
+  models.forEach(name => {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    modelSelect.append(option);
+  });
+  const preferred = api.selected_model || models[0];
+  if (models.includes(preferred)) modelSelect.value = preferred;
 }
 
 function render() {
-  transcript.querySelectorAll(".entry").forEach(node => node.remove());
-  empty.hidden = session.entries.length > 0;
-
-  session.entries.forEach((entry, entryIndex) => {
-    const wrap = document.createElement("section");
-    wrap.className = "entry";
-    wrap.append(renderQuery(entry, entryIndex));
-    entry.turns.forEach((turn, index) => wrap.append(renderTurn(turn, index)));
-    wrap.append(renderBrief(entry, entryIndex));
-    transcript.append(wrap);
-  });
-
-  count.textContent = String(session.entries.length);
-  const latest = session.entries.at(-1);
-  const value = latest?.confidence || 0;
-  confidence.textContent = `${value}%`;
-  confidenceFill.style.width = `${value}%`;
-  model.textContent = latest?.model || "Material deterministic engine v2";
-  clear.disabled = session.entries.length === 0;
-  exportButton.disabled = session.entries.length === 0;
-  transcript.scrollTop = transcript.scrollHeight;
+  const conversation = activeConversation();
+  if (!conversation) return;
+  renderThreads();
+  renderMessages(conversation);
+  renderRecap(conversation);
+  renderEngine();
+  count.textContent = String(conversation.messages.length);
+  clearButton.disabled = generating || conversation.messages.length === 0;
+  copyRecapButton.disabled = !conversation.recap.current_answer;
+  exportButton.disabled = conversation.messages.length === 0;
+  send.disabled = generating;
+  threadSelect.disabled = generating;
+  newChatButton.disabled = generating;
 }
 
 async function checkApi() {
   try {
     const response = await fetch("./api/status", {cache: "no-store"});
     if (!response.ok) throw new Error("API unavailable");
-    const data = await response.json();
-    claudeAvailable = Boolean(data.claude_available);
-    liveMode = claudeAvailable;
+    api = {...api, ...(await response.json()), checked: true};
   } catch {
-    claudeAvailable = false;
-    liveMode = false;
+    api = {...api, checked: true, ollama_available: false, selected_model: "", models: []};
   }
-  setMode();
-}
-
-function decisionAsMarkdown(entry, entryIndex) {
-  const assumptions = entry.brief.assumptions.map(item => `- ${item}`).join("\n");
-  return `# Material.ai decision ${entryIndex + 1}\n\n**Prompt:** ${entry.prompt}\n\n**Mode:** ${workflows[entry.workflow].label}\n\n**Confidence:** ${entry.confidence}%\n\n## Recommendation\n\n${entry.brief.recommendation}\n\n## Strongest objection\n\n${entry.brief.strongest_objection}\n\n## Assumptions\n\n${assumptions}\n\n## Next action\n\n${entry.brief.next_action}`;
+  renderModelOptions();
+  render();
 }
 
 async function copyText(value) {
@@ -259,108 +212,182 @@ async function copyText(value) {
   helper.remove();
 }
 
-form.addEventListener("submit", async event => {
-  event.preventDefault();
-  const prompt = input.value.trim();
-  if (!prompt) return;
+function demoResponse(conversation) {
+  const latest = [...conversation.messages].reverse().find(message => message.role === "user");
+  const first = conversation.messages.find(message => message.role === "user") || latest;
+  const priorUsers = conversation.messages.filter(message => message.role === "user").slice(0, -1);
+  const previous = priorUsers.at(-1);
+  const result = runLocalDebate(latest.content, {workflow: "decide"});
+  const continuity = previous ? ` This continues your earlier point about “${previous.content.slice(0, 120)}.”` : "";
+  return {
+    model: "Material deterministic chat demo",
+    turns: [
+      {role: "ari", content: `${result.turns[0].text}${continuity}`},
+      {role: "mike", content: result.turns[1].text}
+    ],
+    recap: {
+      question: conversation.recap.question || first.content,
+      current_answer: result.brief.recommendation,
+      ari_position: result.turns[0].text,
+      mike_position: result.turns[1].text,
+      agreement: ["They agree that the next move should create evidence instead of pretending the tradeoff is settled."],
+      open_questions: result.brief.assumptions.slice(0, 2),
+      next_move: result.brief.next_action
+    }
+  };
+}
 
-  const decisionInput = normalizeDecisionInput({
-    workflow: workflowInput.value,
-    constraints: constraintsInput.value,
-    success: successInput.value
+async function requestResponse(conversation) {
+  if (mode === "demo") {
+    await new Promise(resolve => window.setTimeout(resolve, 260));
+    return demoResponse(conversation);
+  }
+
+  const response = await fetch("./api/chat", {
+    method: "POST",
+    headers: {"content-type": "application/json"},
+    body: JSON.stringify({
+      conversation_id: conversation.id,
+      model: modelSelect.value,
+      messages: conversation.messages,
+      recap: conversation.recap
+    })
   });
+  let data = {};
+  try {
+    data = await response.json();
+  } catch {
+    data = {};
+  }
+  if (!response.ok) {
+    const available = Array.isArray(data.available_models) && data.available_models.length
+      ? ` Available models: ${data.available_models.join(", ")}.`
+      : "";
+    throw new Error(`${data.error || "The local model request failed."}${available}`);
+  }
+  return data;
+}
 
-  run.disabled = true;
-  run.textContent = "Thinking…";
-  setNotice();
+async function submitMessage(content) {
+  const conversation = activeConversation();
+  const now = new Date().toISOString();
+  conversation.messages.push({role: "user", content, created_at: now});
+  if (conversation.messages.filter(message => message.role === "user").length === 1) {
+    conversation.title = titleFromMessage(content);
+  }
+  conversation.updated_at = now;
+  save();
+
+  generating = true;
+  send.textContent = "Thinking…";
+  setNotice("Ari + Mike are thinking…");
+  render();
 
   try {
-    let result;
-    if (liveMode) {
-      try {
-        const response = await fetch("./api/debate", {
-          method: "POST",
-          headers: {"content-type": "application/json"},
-          body: JSON.stringify({prompt, ...decisionInput})
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "Claude request failed.");
-        result = data;
-      } catch {
-        liveMode = false;
-        setMode();
-        result = simulateDemoDebate(prompt, decisionInput);
-        setNotice("Claude was unavailable, so this decision used the deterministic local engine.", "warning");
-      }
-    } else {
-      await new Promise(resolve => setTimeout(resolve, 320));
-      result = simulateDemoDebate(prompt, decisionInput);
-    }
-
-    const entry = normalizeEntry({
-      prompt,
-      ...decisionInput,
-      ...result,
-      created_at: new Date().toISOString()
+    const result = await requestResponse(conversation);
+    const responseTime = new Date().toISOString();
+    result.turns.forEach((turn, index) => {
+      conversation.messages.push({
+        role: turn.role,
+        content: turn.content,
+        created_at: new Date(Date.now() + index).toISOString()
+      });
     });
-    session.entries.push(entry);
-    session.entries = session.entries.slice(-12);
+    conversation.recap = normalizeRecap(result.recap);
+    conversation.model = result.model || modelSelect.value;
+    conversation.updated_at = responseTime;
     save();
-    render();
-    input.value = "";
+    setNotice(result.usage?.trimmed ? "Older turns were summarized by the living recap to fit the local model context." : "");
   } catch (error) {
-    setNotice(error.message || "The decision could not be generated.", "error");
+    setNotice(`${error.message} Your message remains saved.`, "error");
   } finally {
-    run.disabled = false;
-    run.textContent = "Run debate";
+    generating = false;
+    send.textContent = "Send";
+    render();
     input.focus();
+  }
+}
+
+form.addEventListener("submit", async event => {
+  event.preventDefault();
+  const content = input.value.trim();
+  if (!content || generating) return;
+  input.value = "";
+  await submitMessage(content);
+});
+
+input.addEventListener("keydown", event => {
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    form.requestSubmit();
   }
 });
 
 modeButton.addEventListener("click", () => {
-  if (!claudeAvailable) {
-    setNotice("Claude mode requires ANTHROPIC_API_KEY on the local Node server.", "warning");
-    return;
+  if (!api.ollama_available || !api.models.length) {
+    mode = "demo";
+    setNotice(api.error || "Ollama is not available. Start it locally, then refresh the model status.", "warning");
+  } else {
+    mode = mode === "ollama" ? "demo" : "ollama";
+    setNotice(mode === "ollama" ? "Using one local Ollama generation per user turn." : "Using the explicit deterministic demo engine.");
   }
-  liveMode = !liveMode;
-  setMode();
-  setNotice();
+  render();
 });
 
-clear.addEventListener("click", () => {
-  session = {entries: []};
+threadSelect.addEventListener("change", () => {
+  store.active_id = threadSelect.value;
   save();
+  setNotice();
   render();
-  setNotice("Session cleared.");
+  input.focus();
+});
+
+newChatButton.addEventListener("click", () => {
+  const conversation = createConversation({id: makeId()});
+  store.conversations.push(conversation);
+  store.conversations = store.conversations.slice(-30);
+  store.active_id = conversation.id;
+  save();
+  setNotice("New chat started.");
+  render();
+  input.focus();
+});
+
+clearButton.addEventListener("click", () => {
+  const conversation = activeConversation();
+  conversation.title = "New chat";
+  conversation.model = "";
+  conversation.messages = [];
+  conversation.recap = normalizeRecap();
+  conversation.updated_at = new Date().toISOString();
+  save();
+  setNotice("Current chat cleared.");
+  render();
+});
+
+copyRecapButton.addEventListener("click", async () => {
+  const conversation = activeConversation();
+  const original = copyRecapButton.textContent;
+  try {
+    await copyText(recapAsMarkdown(conversation.recap, conversation.title));
+    copyRecapButton.textContent = "Copied";
+  } catch {
+    copyRecapButton.textContent = "Copy failed";
+  }
+  window.setTimeout(() => { copyRecapButton.textContent = original; }, 1400);
 });
 
 exportButton.addEventListener("click", () => {
-  const url = URL.createObjectURL(new Blob([JSON.stringify(session, null, 2)], {type: "application/json"}));
+  const conversation = activeConversation();
+  const blob = new Blob([conversationAsMarkdown(conversation)], {type: "text/markdown"});
+  const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `material-ai-${new Date().toISOString().slice(0, 10)}.json`;
+  link.download = `material-ai-${conversation.id}.md`;
   link.click();
   URL.revokeObjectURL(url);
 });
 
-transcript.addEventListener("click", async event => {
-  const button = event.target.closest("[data-copy-entry]");
-  if (!button) return;
-  const entryIndex = Number(button.dataset.copyEntry);
-  const entry = session.entries[entryIndex];
-  if (!entry) return;
-
-  const original = button.textContent;
-  try {
-    await copyText(decisionAsMarkdown(entry, entryIndex));
-    button.textContent = "Copied";
-  } catch {
-    button.textContent = "Copy failed";
-  }
-  window.setTimeout(() => {
-    button.textContent = original;
-  }, 1400);
-});
-
+renderModelOptions();
 render();
 checkApi();
